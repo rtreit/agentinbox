@@ -75,9 +75,10 @@ function parseBody(req) {
 }
 
 /** Verify the callback token matches (if configured). */
-function authenticateRequest(msg, token) {
+function authenticateRequest(req, token) {
   if (!token) return true; // no token configured → allow all
-  return msg.token === token;
+  const supplied = (req.query && req.query.token) || req.headers["x-callback-token"];
+  return supplied === token;
 }
 
 /** Return true if the message should be processed (user-sent, non-empty). */
@@ -230,7 +231,7 @@ module.exports = async function (context, req) {
     return;
   }
 
-  if (!authenticateRequest(msg, config.callbackToken)) {
+  if (!authenticateRequest(req, config.callbackToken)) {
     context.log.warn("Callback token mismatch — rejecting request");
     context.res = { status: 401, body: "unauthorized" };
     return;

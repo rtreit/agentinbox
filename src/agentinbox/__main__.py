@@ -17,27 +17,31 @@ from .daemon import run_daemon
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="agentinbox",
-        description="Agent Inbox — multi-agent GroupMe message router and executor",
-    )
-    parser.add_argument(
+    # Shared arguments for subcommands
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument(
         "--config", "-c",
         help="Path to agentinbox.toml config file",
     )
-    parser.add_argument(
+    parent_parser.add_argument(
         "--agent-name",
         help="Agent name (default: hal)",
     )
-    parser.add_argument(
+    parent_parser.add_argument(
         "--queue-name",
         help="Azure Storage Queue name (default: agentinbox-{agent_name})",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="agentinbox",
+        description="Agent Inbox — multi-agent GroupMe message router and executor",
+        parents=[parent_parser],
     )
 
     sub = parser.add_subparsers(dest="command")
 
     # daemon subcommand
-    daemon_parser = sub.add_parser("daemon", help="Run persistent daemon")
+    daemon_parser = sub.add_parser("daemon", help="Run persistent daemon", parents=[parent_parser])
     daemon_parser.add_argument(
         "--interval", type=float,
         help="Poll interval in seconds (default: 10)",
@@ -57,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # peek subcommand
-    sub.add_parser("peek", help="Peek at queue without consuming")
+    sub.add_parser("peek", help="Peek at queue without consuming", parents=[parent_parser])
 
     return parser
 
