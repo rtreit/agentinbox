@@ -100,25 +100,35 @@ class CopilotExecutor(Executor):
 
         in_session_zero = _is_session_zero()
 
+        # Clean env — uv injects NODE_OPTIONS=--no-warnings which breaks copilot
+        clean_env = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+
         try:
             if in_session_zero:
                 stderr_path = log_dir / f"copilot_stderr_{safe_id}.log"
                 stderr_file = open(stderr_path, "w", encoding="utf-8")
                 proc = subprocess.Popen(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_command],
+                    ["powershell", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                     "-NonInteractive", "-Command", ps_command],
                     cwd=ctx.working_directory,
+                    env=clean_env,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr_file,
+                    stdin=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
-                # Interactive launch — conhost creates a visible console window.
-                # Do NOT redirect stdout/stderr — conhost exits immediately if
-                # there's no console to attach to.
+                # Interactive launch — CREATE_NEW_CONSOLE gives copilot its own
+                # visible window and proc.wait() blocks until it exits.
                 proc = subprocess.Popen(
-                    ["conhost.exe", "powershell", "-NoProfile", "-Command", ps_command],
+                    ["powershell", "-NoLogo", "-NoProfile",
+                     "-ExecutionPolicy", "Bypass", "-Command", ps_command],
                     cwd=ctx.working_directory,
+                    env=clean_env,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
                 )
+
+            print(f"  [executor] PID={proc.pid} session0={in_session_zero}")
 
             proc.wait(timeout=3600)
 
