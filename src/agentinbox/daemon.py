@@ -109,8 +109,8 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
     instruction = directive["instruction"]
     sender_name = directive["sender_name"]
     message_id = directive["message_id"]
-    reply_bot_id = directive.get("reply_bot_id") or config.bot_id_for_chat(
-        directive.get("group_id")
+    reply_bot_id = config.bot_id_for_chat(directive.get("group_id")) or directive.get(
+        "reply_bot_id"
     )
 
     _log_entry(log_dir, {

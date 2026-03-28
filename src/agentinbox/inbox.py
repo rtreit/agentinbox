@@ -164,7 +164,7 @@ def process_one(config: Config, seen_ids: set[str] | None = None) -> dict | None
     print(f"  [{sender_name}] {instruction}")
 
     # Acknowledge receipt
-    ack_bot_id = reply_bot_id or config.bot_id_for_chat(group_id)
+    ack_bot_id = config.bot_id_for_chat(group_id) or reply_bot_id
     groupme_post("🫡", bot_id=ack_bot_id)
 
     # Delete from queue — we've accepted responsibility

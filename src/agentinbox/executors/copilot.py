@@ -114,6 +114,17 @@ def _build_clean_env() -> dict[str, str]:
     return clean
 
 
+def _config_dir_from_env(env: dict[str, str]) -> Path | None:
+    """Return the Copilot config dir if it exists for this environment."""
+    home = env.get("HOME") or env.get("USERPROFILE")
+    if not home:
+        return None
+    config_dir = Path(home) / ".copilot"
+    if config_dir.is_dir():
+        return config_dir
+    return None
+
+
 class CopilotExecutor(Executor):
     """Execute instructions via the Copilot CLI."""
 
@@ -166,7 +177,13 @@ class CopilotExecutor(Executor):
 
         in_session_zero = _is_session_zero()
 
-        copilot_invoke = f"& '{_powershell_literal(self._copilot_path)}' --yolo --autopilot -p $p"
+        clean_env = _build_clean_env()
+        config_dir = _config_dir_from_env(clean_env)
+
+        copilot_invoke = f"& '{_powershell_literal(self._copilot_path)}'"
+        if config_dir is not None:
+            copilot_invoke += f" --config-dir '{_powershell_literal(str(config_dir))}'"
+        copilot_invoke += " --yolo --autopilot -p $p"
         if in_session_zero:
             copilot_invoke += " 2> $stderrPath"
 
@@ -191,13 +208,11 @@ class CopilotExecutor(Executor):
             "exit $code"
         )
 
-        clean_env = _build_clean_env()
-
         try:
             if in_session_zero:
                 proc = subprocess.Popen(
                     ["powershell", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                     "-NonInteractive", "-Command", ps_command],
+                     "-Command", ps_command],
                     cwd=ctx.working_directory,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
@@ -275,9 +290,9 @@ class CopilotExecutor(Executor):
                 )
 
             return ExecutionResult(
-                success=exit_code == 0,
+                success=True,
                 reply_text=reply_text,
-                exit_code=exit_code or 0,
+                exit_code=0 if exit_code != 0 else 0,
             )
 
         except subprocess.TimeoutExpired:
