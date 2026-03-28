@@ -79,6 +79,17 @@ def _read_tail(path: Path, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
+def _read_exit_code(path: Path) -> int | None:
+    """Read a numeric exit code file if it exists."""
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip().lstrip("\ufeff")
+        return int(text)
+    except (OSError, ValueError):
+        return None
+
+
 def _build_clean_env() -> dict[str, str]:
     """Remove shell/tooling env vars that can perturb nested Copilot launches."""
     clean: dict[str, str] = {}
@@ -132,7 +143,9 @@ class CopilotExecutor(Executor):
         prompt_file = log_dir / f"prompt_{safe_id}.txt"
 
         stderr_path = log_dir / f"copilot_stderr_{safe_id}.log"
+        status_path = log_dir / f"copilot_exit_{safe_id}.txt"
         stderr_path.unlink(missing_ok=True)
+        status_path.unlink(missing_ok=True)
 
         # Build the prompt
         prompt = (
@@ -151,48 +164,86 @@ class CopilotExecutor(Executor):
         )
         prompt_file.write_text(prompt, encoding="utf-8")
 
-        # Build the command
-        ps_command = (
-            f"$p = Get-Content -LiteralPath '{_powershell_literal(str(prompt_file))}' "
-            f"-Raw -Encoding UTF8; "
-            f"Set-Location -LiteralPath '{_powershell_literal(str(Path(ctx.working_directory).resolve()))}'; "
-            f"& '{_powershell_literal(self._copilot_path)}' --yolo --autopilot -p $p"
-        )
-
         in_session_zero = _is_session_zero()
 
+        copilot_invoke = f"& '{_powershell_literal(self._copilot_path)}' --yolo --autopilot -p $p"
+        if in_session_zero:
+            copilot_invoke += " 2> $stderrPath"
+
+        # Build the command
+        ps_command = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$statusPath = '{_powershell_literal(str(status_path))}'; "
+            f"$stderrPath = '{_powershell_literal(str(stderr_path))}'; "
+            "$code = 1; "
+            "try { "
+            f"$p = Get-Content -LiteralPath '{_powershell_literal(str(prompt_file))}' "
+            "-Raw -Encoding UTF8; "
+            f"Set-Location -LiteralPath '{_powershell_literal(str(Path(ctx.working_directory).resolve()))}'; "
+            f"{copilot_invoke}; "
+            "$code = $LASTEXITCODE; "
+            "} catch { "
+            "$_ | Out-File -LiteralPath $stderrPath -Append -Encoding utf8; "
+            "$code = 1; "
+            "} finally { "
+            "Set-Content -LiteralPath $statusPath -Value $code -Encoding Ascii; "
+            "}; "
+            "exit $code"
+        )
+
         clean_env = _build_clean_env()
-        stderr_file = None
 
         try:
             if in_session_zero:
-                stderr_file = open(stderr_path, "wb")
                 proc = subprocess.Popen(
                     ["powershell", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
                      "-NonInteractive", "-Command", ps_command],
                     cwd=ctx.working_directory,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
-                    stderr=stderr_file,
+                    stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
+                print(f"  [executor] PID={proc.pid} session0={in_session_zero} host=headless")
+                proc.wait(timeout=3600)
+                exit_code = _read_exit_code(status_path)
+                if exit_code is None:
+                    exit_code = proc.returncode or 1
             else:
-                # Interactive launch — CREATE_NEW_CONSOLE gives copilot its own
-                # visible window and proc.wait() blocks until it exits.
-                stderr_file = open(stderr_path, "wb")
+                # Interactive launch — explicitly use conhost so the Copilot
+                # session is not hosted inside Windows Terminal during stress runs.
                 proc = subprocess.Popen(
-                    ["powershell", "-NoLogo", "-NoProfile",
-                      "-ExecutionPolicy", "Bypass", "-Command", ps_command],
+                    ["conhost.exe", "powershell", "-NoLogo", "-NoProfile",
+                     "-ExecutionPolicy", "Bypass", "-Command", ps_command],
                     cwd=ctx.working_directory,
                     env=clean_env,
-                    stderr=stderr_file,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE,
                 )
-
-            print(f"  [executor] PID={proc.pid} session0={in_session_zero}")
-
-            proc.wait(timeout=3600)
+                print(f"  [executor] PID={proc.pid} session0={in_session_zero} host=conhost")
+                deadline = time.time() + 3600
+                exit_code = None
+                while time.time() < deadline:
+                    exit_code = _read_exit_code(status_path)
+                    if exit_code is not None:
+                        break
+                    if reply_file.exists() and reply_file.stat().st_size > 0:
+                        exit_code = 0
+                        break
+                    time.sleep(1)
+                if exit_code is None:
+                    if proc.poll() is None:
+                        proc.kill()
+                    return ExecutionResult(
+                        success=False,
+                        reply_text="Task timed out after 1 hour.",
+                        exit_code=-1,
+                        error="timeout",
+                    )
+                if proc.poll() is None:
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
 
             # Read reply
             reply_text = ""
@@ -202,7 +253,7 @@ class CopilotExecutor(Executor):
 
             if not reply_text:
                 error_tail = _read_tail(stderr_path)
-                if proc.returncode == 0:
+                if exit_code == 0:
                     return ExecutionResult(
                         success=False,
                         reply_text=(
@@ -212,21 +263,21 @@ class CopilotExecutor(Executor):
                         exit_code=0,
                         error="missing reply file",
                     )
-                detail = f" Exit {proc.returncode}."
+                detail = f" Exit {exit_code}."
                 if error_tail:
                     condensed = " ".join(error_tail.split())
                     detail += f" {condensed[:700]}"
                 return ExecutionResult(
                     success=False,
                     reply_text=f"Task failed:{detail}",
-                    exit_code=proc.returncode or 1,
+                    exit_code=exit_code or 1,
                     error=error_tail or "copilot failed without writing a reply file",
                 )
 
             return ExecutionResult(
-                success=proc.returncode == 0,
+                success=exit_code == 0,
                 reply_text=reply_text,
-                exit_code=proc.returncode or 0,
+                exit_code=exit_code or 0,
             )
 
         except subprocess.TimeoutExpired:
@@ -245,8 +296,4 @@ class CopilotExecutor(Executor):
             )
         finally:
             prompt_file.unlink(missing_ok=True)
-            if stderr_file is not None:
-                try:
-                    stderr_file.close()
-                except Exception:
-                    pass
+            status_path.unlink(missing_ok=True)
