@@ -18,22 +18,36 @@ from ..executor import ExecutionContext, ExecutionResult, Executor
 
 
 def _find_copilot() -> str | None:
-    """Locate the copilot CLI executable."""
-    # Check PATH first
+    """Find the GitHub Copilot CLI executable."""
+    winget_copilot = Path(
+        os.environ.get("LOCALAPPDATA", ""),
+        "Microsoft",
+        "WinGet",
+        "Links",
+        "copilot.exe",
+    )
+    if winget_copilot.is_file():
+        return str(winget_copilot)
+
     found = shutil.which("copilot")
-    if found:
+    if found and "WindowsApps" not in found:
         return found
 
-    # Common Windows install locations
-    candidates = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "copilot.exe",
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "copilot-cli" / "copilot.exe",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
+    winget_packages = Path(
+        os.environ.get("LOCALAPPDATA", ""),
+        "Microsoft",
+        "WinGet",
+        "Packages",
+    )
+    if winget_packages.is_dir():
+        for candidate in winget_packages.glob("GitHub.Copilot_*/copilot.exe"):
             return str(candidate)
 
-    return None
+    fallback = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "copilot-cli" / "copilot.exe"
+    if fallback.exists():
+        return str(fallback)
+
+    return found
 
 
 def _is_session_zero() -> bool:
@@ -65,6 +79,30 @@ def _read_tail(path: Path, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
+def _build_clean_env() -> dict[str, str]:
+    """Remove shell/tooling env vars that can perturb nested Copilot launches."""
+    clean: dict[str, str] = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if upper == "NODE_OPTIONS":
+            continue
+        if upper.startswith("NPM_CONFIG_") or upper.startswith("NPM_PACKAGE_"):
+            continue
+        if upper.startswith("YARN_") or upper.startswith("PNPM_"):
+            continue
+        if upper.startswith("COPILOT_"):
+            continue
+        if "--NO-WARNINGS" in value.upper() and (
+            "NODE" in upper or upper.startswith(("NPM_", "YARN_", "PNPM_"))
+        ):
+            continue
+        clean[key] = value
+
+    if "HOME" not in clean and clean.get("USERPROFILE"):
+        clean["HOME"] = clean["USERPROFILE"]
+    return clean
+
+
 class CopilotExecutor(Executor):
     """Execute instructions via the Copilot CLI."""
 
@@ -73,6 +111,10 @@ class CopilotExecutor(Executor):
 
     def name(self) -> str:
         return "CopilotExecutor"
+
+    @property
+    def resolved_path(self) -> str | None:
+        return self._copilot_path
 
     def execute(self, ctx: ExecutionContext) -> ExecutionResult:
         if not self._copilot_path:
@@ -119,8 +161,7 @@ class CopilotExecutor(Executor):
 
         in_session_zero = _is_session_zero()
 
-        # Clean env — uv injects NODE_OPTIONS=--no-warnings which breaks copilot
-        clean_env = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+        clean_env = _build_clean_env()
         stderr_file = None
 
         try:

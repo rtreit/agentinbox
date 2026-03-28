@@ -195,6 +195,8 @@ def run_daemon(config: Config) -> None:
     print(f"  Agent: {config.agent_name}")
     print(f"  Queue: {config.resolved_queue_name}")
     print(f"  Executor: {executor.name()}")
+    if isinstance(executor, CopilotExecutor):
+        print(f"  Copilot: {executor.resolved_path or '(not found)'}")
     print(f"  Working dir: {Path(config.working_directory).resolve()}")
     print(f"  Interval: {config.poll_interval}s")
     print(f"  Log dir: {log_dir}")
@@ -205,6 +207,7 @@ def run_daemon(config: Config) -> None:
         "agent": config.agent_name,
         "queue": config.resolved_queue_name,
         "executor": executor.name(),
+        "copilot": executor.resolved_path if isinstance(executor, CopilotExecutor) else None,
         "interval": config.poll_interval,
     })
 
