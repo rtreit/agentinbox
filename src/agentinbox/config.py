@@ -64,6 +64,11 @@ class Config:
 
     @property
     def default_bot_id(self) -> str | None:
+        # Check agent-specific bot ID first (e.g., GROUPME_BOT_ID_HAL)
+        agent_env = f"GROUPME_BOT_ID_{self.agent_name.upper()}"
+        agent_bot = os.environ.get(agent_env)
+        if agent_bot:
+            return agent_bot
         return os.environ.get(self.bot_id_env)
 
     def bot_id_for_chat(self, group_id: str | None) -> str | None:
