@@ -176,12 +176,19 @@ def process_one(config: Config) -> dict | None:
 
 
 def get_all_directives(config: Config) -> list[dict]:
-    """Drain all pending directives from the queue."""
+    """Drain all pending directives from the queue, deduplicating by message_id."""
     directives = []
+    seen_ids: set[str] = set()
     while True:
         directive = process_one(config)
         if directive is None:
             break
+        mid = directive.get("message_id", "")
+        if mid and mid in seen_ids:
+            print(f"  skip duplicate: {mid}")
+            continue
+        if mid:
+            seen_ids.add(mid)
         directives.append(directive)
     return directives
 

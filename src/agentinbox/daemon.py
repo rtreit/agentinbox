@@ -211,11 +211,29 @@ def run_daemon(config: Config) -> None:
     # Recover orphaned tasks from previous runs
     _recover_orphans(config, log_dir)
 
+    # Dedup cache: message_id → timestamp (prevents processing the same
+    # GroupMe message twice when multiple bots forward to the same queue)
+    seen_message_ids: dict[str, float] = {}
+    DEDUP_WINDOW = 300  # 5 minutes
+
     try:
         while True:
             try:
+                # Prune expired entries from dedup cache
+                now = time.time()
+                expired = [k for k, v in seen_message_ids.items() if now - v > DEDUP_WINDOW]
+                for k in expired:
+                    del seen_message_ids[k]
+
                 directives = get_all_directives(config)
                 for directive in directives:
+                    mid = directive.get("message_id", "")
+                    if mid and mid in seen_message_ids:
+                        print(f"  skip duplicate (dedup cache): {mid}")
+                        _log_entry(log_dir, {"event": "dedup_skip", "message_id": mid})
+                        continue
+                    if mid:
+                        seen_message_ids[mid] = time.time()
                     _dispatch_directive(directive, config, executor, log_dir)
             except KeyboardInterrupt:
                 raise

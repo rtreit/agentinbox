@@ -112,11 +112,12 @@ class CopilotExecutor(Executor):
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
+                # Interactive launch — conhost creates a visible console window.
+                # Do NOT redirect stdout/stderr — conhost exits immediately if
+                # there's no console to attach to.
                 proc = subprocess.Popen(
                     ["conhost.exe", "powershell", "-NoProfile", "-Command", ps_command],
                     cwd=ctx.working_directory,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
                 )
 
             proc.wait(timeout=3600)
