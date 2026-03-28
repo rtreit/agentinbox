@@ -17,6 +17,31 @@
 const { QueueClient } = require("@azure/storage-queue");
 
 // ---------------------------------------------------------------------------
+// Deduplication — prevents the same GroupMe message from being enqueued
+// multiple times when multiple bots in the same group all forward to this
+// function.  Uses a simple in-memory cache with a 5-minute TTL.
+// ---------------------------------------------------------------------------
+
+const DEDUP_TTL_MS = 5 * 60 * 1000;
+const recentMessageIds = new Map(); // messageId → timestamp
+
+function isDuplicate(messageId) {
+  if (!messageId) return false;
+  const now = Date.now();
+
+  // Prune expired entries (lazy cleanup, cap at 1000)
+  if (recentMessageIds.size > 1000) {
+    for (const [key, ts] of recentMessageIds) {
+      if (now - ts > DEDUP_TTL_MS) recentMessageIds.delete(key);
+    }
+  }
+
+  if (recentMessageIds.has(messageId)) return true;
+  recentMessageIds.set(messageId, now);
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Configuration helpers
 // ---------------------------------------------------------------------------
 
@@ -240,6 +265,14 @@ module.exports = async function (context, req) {
   if (!isProcessableMessage(msg)) {
     // System messages, bot messages, or empty text — silently accept
     context.res = { status: 204, body: "" };
+    return;
+  }
+
+  // --- Dedup (multiple bots in the same group forward the same message) ---
+  const messageId = msg.id || msg.message_id || "";
+  if (isDuplicate(messageId)) {
+    context.log(`Duplicate message ${messageId} — skipping`);
+    context.res = { status: 200, body: JSON.stringify({ status: "duplicate", messageId }) };
     return;
   }
 
