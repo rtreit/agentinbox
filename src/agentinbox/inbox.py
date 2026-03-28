@@ -120,7 +120,7 @@ def peek_messages(config: Config, max_messages: int = 5) -> list[dict]:
     return messages
 
 
-def process_one(config: Config) -> dict | None:
+def process_one(config: Config, seen_ids: set[str] | None = None) -> dict | None:
     """Receive and process one queue message.
 
     Returns a directive dict or None if the queue is empty.
@@ -156,6 +156,11 @@ def process_one(config: Config) -> dict | None:
     group_id = source.get("groupId")
     reply_bot_id = source.get("replyBotId")
 
+    if seen_ids is not None and message_id in seen_ids:
+        print(f"  skip duplicate before ack: {message_id}")
+        client.delete_message(msg)
+        return {"_duplicate": True, "message_id": message_id}
+
     print(f"  [{sender_name}] {instruction}")
 
     # Acknowledge receipt
@@ -175,18 +180,17 @@ def process_one(config: Config) -> dict | None:
     }
 
 
-def get_all_directives(config: Config) -> list[dict]:
+def get_all_directives(config: Config, pre_seen_ids: set[str] | None = None) -> list[dict]:
     """Drain all pending directives from the queue, deduplicating by message_id."""
     directives = []
-    seen_ids: set[str] = set()
+    seen_ids: set[str] = set(pre_seen_ids or set())
     while True:
-        directive = process_one(config)
+        directive = process_one(config, seen_ids=seen_ids)
         if directive is None:
             break
-        mid = directive.get("message_id", "")
-        if mid and mid in seen_ids:
-            print(f"  skip duplicate: {mid}")
+        if directive.get("_duplicate"):
             continue
+        mid = directive.get("message_id", "")
         if mid:
             seen_ids.add(mid)
         directives.append(directive)

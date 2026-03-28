@@ -228,7 +228,7 @@ def run_daemon(config: Config) -> None:
                 for k in expired:
                     del seen_message_ids[k]
 
-                directives = get_all_directives(config)
+                directives = get_all_directives(config, pre_seen_ids=set(seen_message_ids))
                 for directive in directives:
                     mid = directive.get("message_id", "")
                     if mid and mid in seen_message_ids:
