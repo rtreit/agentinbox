@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "script": ".github/hooks/scripts/session-start.ps1",
+        "description": "Ensures the agent daemon is running and checks the inbox for pending directives."
+      }
+    ],
+    "pre-tool": [
+      {
+        "script": ".github/hooks/scripts/pre-tool-policy.ps1",
+        "tools": ["edit", "create"],
+        "description": "Validates file changes against project policies before they are applied."
+      }
+    ]
+  }
+}

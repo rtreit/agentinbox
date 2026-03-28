@@ -1,0 +1,20 @@
+[project]
+name = "agentinbox"
+version = "0.1.0"
+description = "A multi-agent inbox daemon that routes GroupMe messages through Azure Storage Queues to configurable executors."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "azure-storage-queue>=12.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+agentinbox = "agentinbox.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentinbox"]

@@ -1,0 +1,13 @@
+{
+  "pythonPath": ".venv\\Scripts\\python.exe",
+  "scriptPath": "-m agentinbox daemon",
+  "workingDirectory": ".",
+  "arguments": "",
+  "restartOnCrash": true,
+  "restartDelaySeconds": 5,
+  "maxRestarts": 10,
+  "maxRestartWindowMinutes": 30,
+  "logDirectory": "logs",
+  "enabled": true,
+  "extraPath": ""
+}

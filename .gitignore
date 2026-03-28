@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Agent Inbox specific
+logs/
+service/bin/
+service/obj/
+service/publish/
+azure-function/node_modules/

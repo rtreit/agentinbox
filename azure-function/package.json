@@ -1,0 +1,17 @@
+{
+  "name": "agentinbox-azure-function",
+  "version": "1.0.0",
+  "description": "Azure Function that receives GroupMe webhook callbacks and routes directed messages to per-agent Azure Storage Queues.",
+  "main": "groupme-callback/index.js",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "dependencies": {
+    "@azure/storage-queue": "^12.25.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}
