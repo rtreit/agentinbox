@@ -51,8 +51,12 @@ class Config:
         return self.queue_name or f"agentinbox-{self.agent_name}"
 
     @property
+    def resolved_working_directory(self) -> str:
+        return str(Path(self.working_directory).resolve())
+
+    @property
     def resolved_log_directory(self) -> Path:
-        return Path(self.working_directory) / self.log_directory
+        return Path(self.resolved_working_directory) / self.log_directory
 
     @property
     def connection_string(self) -> str | None:
@@ -120,6 +124,7 @@ def _apply_env(cfg: Config) -> None:
         "AGENTINBOX_EXECUTOR_TYPE": "executor_type",
         "AGENTINBOX_EXECUTOR_COMMAND": "executor_command",
         "AGENTINBOX_LOG_DIR": "log_directory",
+        "AGENTINBOX_WORKING_DIRECTORY": "working_directory",
     }
     for env_key, attr in env_map.items():
         val = os.environ.get(env_key)
@@ -142,6 +147,8 @@ def _apply_cli(cfg: Config, args: argparse.Namespace) -> None:
         cfg.executor_type = args.executor
     if hasattr(args, "executor_command") and args.executor_command:
         cfg.executor_command = args.executor_command
+    if hasattr(args, "working_directory") and args.working_directory:
+        cfg.working_directory = args.working_directory
     if hasattr(args, "config") and args.config:
         pass  # already loaded
 

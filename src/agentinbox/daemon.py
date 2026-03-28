@@ -138,7 +138,7 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
         instruction=instruction,
         sender_name=sender_name,
         message_id=message_id,
-        working_directory=config.working_directory,
+        working_directory=config.resolved_working_directory,
         raw_text=directive.get("raw_text", ""),
     )
 
@@ -195,6 +195,7 @@ def run_daemon(config: Config) -> None:
     print(f"  Agent: {config.agent_name}")
     print(f"  Queue: {config.resolved_queue_name}")
     print(f"  Executor: {executor.name()}")
+    print(f"  Working dir: {Path(config.working_directory).resolve()}")
     print(f"  Interval: {config.poll_interval}s")
     print(f"  Log dir: {log_dir}")
     print()

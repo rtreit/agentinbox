@@ -56,6 +56,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Command for command/python executors",
     )
     daemon_parser.add_argument(
+        "--working-directory",
+        help="Working directory for executor (default: current directory)",
+    )
+    daemon_parser.add_argument(
         "--dry-run", action="store_true",
         help="Print directives without executing",
     )
