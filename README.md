@@ -52,13 +52,13 @@ copy .env.example .env
 # Edit .env with your STORAGE_CONNECTION_STRING and GROUPME_BOT_ID
 
 # Run one-shot (process pending directives and exit)
-python -m agentinbox
+uv run python -m agentinbox
 
 # Run persistent daemon
-python -m agentinbox daemon
+uv run python -m agentinbox daemon
 
 # Peek at queue without consuming
-python -m agentinbox peek
+uv run python -m agentinbox peek
 ```
 
 ## Full Deployment Guide
@@ -222,16 +222,21 @@ Edit `.env`:
 ```env
 STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 GROUPME_BOT_ID=<your-bot-id-from-step-2>
+GH_TOKEN=<github-token-for-headless-copilot-auth>
 AGENTINBOX_AGENT_NAME=hal
 ```
+
+If you plan to run the daemon as a Windows service in Session 0, set `GH_TOKEN`
+or `GITHUB_TOKEN` in `.env`. Mapping `HOME`/`.copilot` alone can still be
+insufficient for nested headless `copilot.exe` auth.
 
 Test connectivity:
 ```powershell
 # Peek at the queue (should show empty or any test messages)
-python -m agentinbox peek
+uv run python -m agentinbox peek
 
 # Run a quick one-shot to verify configuration
-python -m agentinbox
+uv run python -m agentinbox
 ```
 
 ### Step 7: Verify End-to-End
@@ -243,12 +248,12 @@ Send a test message to your GroupMe chat:
 
 Then check if it arrived:
 ```powershell
-python -m agentinbox peek
+uv run python -m agentinbox peek
 ```
 
 You should see the message in the queue. To consume and process it:
 ```powershell
-python -m agentinbox daemon --dry-run
+uv run python -m agentinbox daemon --dry-run
 ```
 
 ### Step 8: (Optional) Install as Windows Service
@@ -365,7 +370,7 @@ directory = "logs"
 ### CLI Arguments
 
 ```powershell
-python -m agentinbox daemon `
+uv run python -m agentinbox daemon `
   --agent-name hal `
   --queue-name agentinbox-hal `
   --interval 10 `
@@ -380,13 +385,13 @@ Run multiple daemons on different machines, each listening to a different queue:
 
 **PC-A (hal):**
 ```powershell
-python -m agentinbox daemon --agent-name hal
+uv run python -m agentinbox daemon --agent-name hal
 # Listens to queue: agentinbox-hal
 ```
 
 **PC-B (buildbot):**
 ```powershell
-python -m agentinbox daemon --agent-name buildbot --executor command --executor-command "make {instruction}"
+uv run python -m agentinbox daemon --agent-name buildbot --executor command --executor-command "make {instruction}"
 # Listens to queue: agentinbox-buildbot
 ```
 
@@ -516,10 +521,10 @@ When running as a Windows service (Session 0), the console uses cp1252 encoding 
 Global flags like `--agent-name` must come **after** the subcommand:
 ```powershell
 # Correct:
-python -m agentinbox daemon --agent-name hal
+uv run python -m agentinbox daemon --agent-name hal
 
 # Also correct (before the subcommand):
-python -m agentinbox --agent-name hal daemon
+uv run python -m agentinbox --agent-name hal daemon
 ```
 
 ### Function returns 401

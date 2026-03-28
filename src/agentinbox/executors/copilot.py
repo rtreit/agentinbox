@@ -16,6 +16,8 @@ from pathlib import Path
 
 from ..executor import ExecutionContext, ExecutionResult, Executor
 
+AUTH_TOKEN_ENV_VARS = ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+
 
 def _find_copilot() -> str | None:
     """Find the GitHub Copilot CLI executable."""
@@ -101,7 +103,7 @@ def _build_clean_env() -> dict[str, str]:
             continue
         if upper.startswith("YARN_") or upper.startswith("PNPM_"):
             continue
-        if upper.startswith("COPILOT_"):
+        if upper.startswith("COPILOT_") and upper != "COPILOT_GITHUB_TOKEN":
             continue
         if "--NO-WARNINGS" in value.upper() and (
             "NODE" in upper or upper.startswith(("NPM_", "YARN_", "PNPM_"))
@@ -125,6 +127,24 @@ def _config_dir_from_env(env: dict[str, str]) -> Path | None:
     return None
 
 
+def _headless_auth_warning(env: dict[str, str]) -> str | None:
+    """Return a warning when service-mode Copilot auth is likely misconfigured."""
+    if not _is_session_zero():
+        return None
+
+    if any(env.get(name) for name in AUTH_TOKEN_ENV_VARS):
+        return None
+
+    config_dir = _config_dir_from_env(env)
+    config_note = f" Found config dir at {config_dir}." if config_dir else ""
+    return (
+        "WARNING: Session 0/service mode detected without GH_TOKEN, GITHUB_TOKEN, "
+        "or COPILOT_GITHUB_TOKEN in the daemon environment. Nested Copilot auth "
+        "may fail in headless mode even when a user profile is mapped."
+        f"{config_note} Add GH_TOKEN to .env and restart the service."
+    )
+
+
 class CopilotExecutor(Executor):
     """Execute instructions via the Copilot CLI."""
 
@@ -137,6 +157,10 @@ class CopilotExecutor(Executor):
     @property
     def resolved_path(self) -> str | None:
         return self._copilot_path
+
+    def startup_warning(self) -> str | None:
+        """Return any operator-facing startup warning for this executor."""
+        return _headless_auth_warning(_build_clean_env())
 
     def execute(self, ctx: ExecutionContext) -> ExecutionResult:
         if not self._copilot_path:
@@ -174,16 +198,34 @@ class CopilotExecutor(Executor):
             "Do NOT post directly to GroupMe; the daemon posts from this file."
         )
         prompt_file.write_text(prompt, encoding="utf-8")
+        launch_prompt = (
+            "Read and follow the task instructions in this UTF-8 file:\n"
+            f"  {prompt_file}\n\n"
+            "Carry out the request described there exactly, then write your final "
+            "plain-text reply to the reply file specified inside that task file."
+        )
 
         in_session_zero = _is_session_zero()
 
         clean_env = _build_clean_env()
         config_dir = _config_dir_from_env(clean_env)
 
-        copilot_invoke = f"& '{_powershell_literal(self._copilot_path)}'"
+        ps_arg_items = []
         if config_dir is not None:
-            copilot_invoke += f" --config-dir '{_powershell_literal(str(config_dir))}'"
-        copilot_invoke += " --yolo --autopilot -p $p"
+            ps_arg_items.extend([
+                "'--config-dir'",
+                f"'{_powershell_literal(str(config_dir))}'",
+            ])
+        ps_arg_items.extend([
+            "'--yolo'",
+            "'--autopilot'",
+            "'-p'",
+            "$p",
+        ])
+        copilot_invoke = (
+            f"$copilotArgs = @({', '.join(ps_arg_items)}); "
+            f"& '{_powershell_literal(self._copilot_path)}' @copilotArgs"
+        )
         if in_session_zero:
             copilot_invoke += " 2> $stderrPath"
 
@@ -194,8 +236,7 @@ class CopilotExecutor(Executor):
             f"$stderrPath = '{_powershell_literal(str(stderr_path))}'; "
             "$code = 1; "
             "try { "
-            f"$p = Get-Content -LiteralPath '{_powershell_literal(str(prompt_file))}' "
-            "-Raw -Encoding UTF8; "
+            f"$p = '{_powershell_literal(launch_prompt)}'; "
             f"Set-Location -LiteralPath '{_powershell_literal(str(Path(ctx.working_directory).resolve()))}'; "
             f"{copilot_invoke}; "
             "$code = $LASTEXITCODE; "

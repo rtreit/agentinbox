@@ -190,6 +190,11 @@ def run_daemon(config: Config) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     executor = _create_executor(config)
+    startup_warning = (
+        executor.startup_warning()
+        if isinstance(executor, CopilotExecutor)
+        else None
+    )
 
     print(f"Agent Inbox daemon started")
     print(f"  Agent: {config.agent_name}")
@@ -200,6 +205,8 @@ def run_daemon(config: Config) -> None:
     print(f"  Working dir: {Path(config.working_directory).resolve()}")
     print(f"  Interval: {config.poll_interval}s")
     print(f"  Log dir: {log_dir}")
+    if startup_warning:
+        print(f"  {startup_warning}")
     print()
 
     _log_entry(log_dir, {
@@ -210,6 +217,12 @@ def run_daemon(config: Config) -> None:
         "copilot": executor.resolved_path if isinstance(executor, CopilotExecutor) else None,
         "interval": config.poll_interval,
     })
+    if startup_warning:
+        _log_entry(log_dir, {
+            "event": "startup_warning",
+            "agent": config.agent_name,
+            "warning": startup_warning,
+        })
 
     # Recover orphaned tasks from previous runs
     _recover_orphans(config, log_dir)
