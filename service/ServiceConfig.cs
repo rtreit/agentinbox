@@ -75,6 +75,17 @@ public class ServiceConfig
     [JsonPropertyName("extraPath")]
     public string ExtraPath { get; set; } = "";
 
+    /// <summary>
+    /// User profile directory (e.g. "C:\Users\randyt") to map into the daemon
+    /// environment when the service runs as SYSTEM.  When set, USERPROFILE, HOME,
+    /// APPDATA, LOCALAPPDATA etc. are pointed at this directory so that tools like
+    /// Copilot CLI can find auth tokens and configuration.
+    /// If empty, the profile is inferred from the working directory path (requires
+    /// the path to be under C:\Users\).
+    /// </summary>
+    [JsonPropertyName("userProfile")]
+    public string UserProfile { get; set; } = "";
+
     // --- helpers ---
 
     private static readonly JsonSerializerOptions s_jsonOpts = new()

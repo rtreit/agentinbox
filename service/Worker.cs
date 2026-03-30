@@ -241,23 +241,16 @@ public class DaemonWorker : BackgroundService
     /// <summary>
     /// Set USERPROFILE, HOMEPATH, APPDATA, LOCALAPPDATA, HOME so that tools like copilot
     /// can find auth tokens and config when running under the SYSTEM account (Session 0).
-    /// Derives the user profile from the workingDirectory (e.g. C:\Users\randy\...).
+    /// Uses the explicit userProfile config if set, otherwise tries to derive the profile
+    /// from the workingDirectory (e.g. C:\Users\randy\...).
     /// </summary>
     private void SetUserProfileVars(ProcessStartInfo psi)
     {
-        var workDir = _config.ResolvedWorkingDirectory;
-        var usersDir = Path.DirectorySeparatorChar + "Users" + Path.DirectorySeparatorChar;
-        var idx = workDir.IndexOf(usersDir, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0)
+        var profileDir = ResolveUserProfile();
+        if (profileDir is null)
             return;
 
-        var afterUsers = workDir[(idx + usersDir.Length)..];
-        var sep = afterUsers.IndexOf(Path.DirectorySeparatorChar);
-        var username = sep >= 0 ? afterUsers[..sep] : afterUsers;
-        var profileDir = workDir[..(idx + usersDir.Length + username.Length)];
-
-        if (!Directory.Exists(profileDir))
-            return;
+        var username = Path.GetFileName(profileDir);
 
         psi.Environment["USERPROFILE"] = profileDir;
         psi.Environment["HOMEPATH"] = @"\Users\" + username;
@@ -267,6 +260,47 @@ public class DaemonWorker : BackgroundService
         psi.Environment["HOME"] = profileDir;
 
         _logger.LogInformation("Set user profile env vars for {User}", username);
+    }
+
+    /// <summary>
+    /// Resolve the user profile directory.  Prefers the explicit <c>userProfile</c>
+    /// config value; falls back to inferring from the working directory path.
+    /// </summary>
+    private string? ResolveUserProfile()
+    {
+        // Explicit config takes priority
+        if (!string.IsNullOrWhiteSpace(_config.UserProfile))
+        {
+            var explicit_ = _config.UserProfile.TrimEnd(Path.DirectorySeparatorChar);
+            if (Directory.Exists(explicit_))
+                return explicit_;
+            _logger.LogWarning("Configured userProfile not found: {Path}", explicit_);
+            return null;
+        }
+
+        // Infer from working directory (C:\Users\<name>\...)
+        var workDir = _config.ResolvedWorkingDirectory;
+        var usersDir = Path.DirectorySeparatorChar + "Users" + Path.DirectorySeparatorChar;
+        var idx = workDir.IndexOf(usersDir, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            _logger.LogWarning(
+                "Cannot infer user profile from working directory '{WorkDir}' " +
+                "(path does not contain \\Users\\). Set \"userProfile\" in " +
+                "agentinbox-service.json to map the correct profile.",
+                workDir);
+            return null;
+        }
+
+        var afterUsers = workDir[(idx + usersDir.Length)..];
+        var sep = afterUsers.IndexOf(Path.DirectorySeparatorChar);
+        var username = sep >= 0 ? afterUsers[..sep] : afterUsers;
+        var profileDir = workDir[..(idx + usersDir.Length + username.Length)];
+
+        if (!Directory.Exists(profileDir))
+            return null;
+
+        return profileDir;
     }
 
     private static async Task StreamToFileAsync(
