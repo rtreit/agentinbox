@@ -1,80 +1,78 @@
 # Agent Inbox
 
-A multi-agent inbox system that routes GroupMe messages through Azure Storage Queues to configurable executors. Run multiple daemons on different PCs, each listening to their own queue, all controllable from the same GroupMe chat.
+Agent Inbox routes directed GroupMe messages into Azure Storage Queues and
+lets one or more daemons execute them. The normal topology is:
 
-## Architecture
-
-```
-GroupMe Chat ──► Azure Function (webhook) ──► Azure Storage Queue(s)
-                   │                              │
-                   │ Routes by:                   │ One queue per agent:
-                   │  • @agentname → agent queue  │  agentinbox-hal
-                   │  • @@ → chat default agent   │  agentinbox-buildbot
-                   │  • Chat → default agent       │  ...
-                   │                              │
-                   ▼                              ▼
-              Reply via                     Daemon (per agent)
-              replyBotId                        │
-                   ▲                           │ Dispatches to executor:
-                   │                           │  • Copilot CLI
-                   └───────── GroupMe ◄────────│  • Shell command
-                              reply             │  • Python script
+```text
+GroupMe chat -> Azure Function webhook -> Azure Storage queue -> Agent Inbox daemon -> executor -> GroupMe reply
 ```
 
-### Message Flow
+Each daemon usually listens to one queue such as `agentinbox-hal` or
+`agentinbox-stressbot`. Multiple daemons can share the same chat as long as
+each one has a distinct agent name or queue.
 
-1. User posts in GroupMe with a directed prefix (`@hal`, `@@`, `🤖`, etc.)
-2. Azure Function receives the webhook, determines target agent and queue
-3. Message is enqueued with v2 schema (includes `replyBotId` for multi-chat routing)
-4. Daemon polls its queue, extracts the instruction, dispatches to executor
-5. Executor runs the task and returns a reply
-6. Daemon posts the reply back to the correct GroupMe chat
+## Current project state
+
+This repository currently contains:
+
+- `src/agentinbox/` - the Python CLI, queue consumer, daemon, config loader,
+  reply poster, and executors
+- `azure-function/` - the GroupMe webhook that routes messages to queues
+- `service/` - a Windows service wrapper that runs `python -m agentinbox daemon`
+- `tools/` - queue provisioning and inspection helpers
+
+The default executor is the GitHub Copilot CLI, but command and Python-script
+executors are also supported.
 
 ## Prerequisites
 
-- **Python 3.13+** with [uv](https://docs.astral.sh/uv/) package manager
-- **Azure CLI** (`az`) — [Install](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
-- **Azure Functions Core Tools** (`func`) — [Install](https://learn.microsoft.com/en-us/azure/azure-functions/functions-run-local)
-- **.NET 8 SDK** — for the Windows service (optional)
-- **Azure subscription** — for Storage Account and Function App
-- **GroupMe account** — with a bot created at [dev.groupme.com](https://dev.groupme.com)
+- Python 3.13+
+- `uv`
+- Azure subscription
+- Azure CLI
+- Azure Functions Core Tools
+- .NET 8 SDK (only needed if you want the Windows service)
+- One or more GroupMe bots
 
-## Quick Start
+## Core commands
+
+From the repo root:
 
 ```powershell
-# Clone and install
-git clone https://github.com/rtreit/agentinbox.git
-cd agentinbox
 uv sync
 
-# Configure
-copy .env.example .env
-# Edit .env with your STORAGE_CONNECTION_STRING and GROUPME_BOT_ID
+# Peek at the current queue without consuming messages
+uv run agentinbox peek --agent-name hal
 
-# Run one-shot (process pending directives and exit)
-uv run python -m agentinbox
+# One-shot mode: drain the queue and print what was accepted
+uv run agentinbox --agent-name hal
 
-# Run persistent daemon
-uv run python -m agentinbox daemon
+# Persistent daemon
+uv run agentinbox daemon --agent-name hal
 
-# Peek at queue without consuming
-uv run python -m agentinbox peek
+# Dry-run daemon: consume and print directives without executing them
+uv run agentinbox daemon --agent-name hal --dry-run
 ```
 
-## Full Deployment Guide
+Configuration precedence is:
 
-This walks through deploying Agent Inbox from scratch on a new machine.
+1. CLI args
+2. `AGENTINBOX_*` environment variables
+3. `agentinbox.toml`
+4. `.env`
 
-### Step 1: Create Azure Resources
+## One-time infrastructure deployment
+
+If the Azure Function, storage account, queues, and GroupMe callback are
+already set up, skip ahead to
+[Bring up an additional system](#bring-up-an-additional-system).
+
+### 1. Create Azure resources
 
 ```powershell
-# Login to Azure
 az login
-
-# Create a resource group
 az group create --name agentinbox --location westus2
 
-# Create a storage account (name must be globally unique, lowercase, no hyphens)
 az storage account create `
   --name <yourstorageaccount> `
   --resource-group agentinbox `
@@ -82,35 +80,6 @@ az storage account create `
   --sku Standard_LRS `
   --kind StorageV2
 
-# Get the connection string (save this — you'll need it for .env and Function app settings)
-az storage account show-connection-string `
-  --name <yourstorageaccount> `
-  --resource-group agentinbox `
-  --query connectionString -o tsv
-
-# Create queue(s) for your agent(s)
-az storage queue create --name agentinbox-hal --connection-string "<your-connection-string>"
-# For additional agents:
-# az storage queue create --name agentinbox-buildbot --connection-string "<your-connection-string>"
-```
-
-### Step 2: Create a GroupMe Bot
-
-1. Go to [dev.groupme.com](https://dev.groupme.com) and log in
-2. Click **Bots** → **Create Bot**
-3. Choose the group chat where you want to receive commands
-4. Name the bot (e.g., "hal")
-5. Leave the **Callback URL** blank for now (we'll set it after deploying the Function)
-6. Save the **Bot ID** — you'll need it for `.env`
-
-> **Multi-chat:** If you want the bot in multiple chats, create one bot per chat and use `AGENTINBOX_BOT_MAP` to map `group_id → bot_id`.
-
-### Step 3: Deploy the Azure Function
-
-The webhook function receives GroupMe callbacks and routes messages to per-agent queues.
-
-```powershell
-# Create a Function App (consumption plan, Node.js 20)
 az functionapp create `
   --name <your-function-app-name> `
   --resource-group agentinbox `
@@ -120,24 +89,77 @@ az functionapp create `
   --functions-version 4 `
   --storage-account <yourstorageaccount> `
   --os-type Windows
+```
 
-# Configure app settings
+Fetch the storage connection string:
+
+```powershell
+az storage account show-connection-string `
+  --name <yourstorageaccount> `
+  --resource-group agentinbox `
+  --query connectionString -o tsv
+```
+
+### 2. Configure the Function App
+
+The webhook routes `@agent`, `@@`, and bot-prefix messages to agent-specific queues.
+
+```powershell
 az functionapp config appsettings set `
   --name <your-function-app-name> `
   --resource-group agentinbox `
   --settings `
     "STORAGE_CONNECTION_STRING=<your-connection-string>" `
-    "AGENTINBOX_AGENTS=hal" `
+    "AGENTINBOX_AGENTS=hal,stressbot" `
     "AGENTINBOX_DEFAULT_AGENT=hal" `
     "AGENTINBOX_QUEUE_PREFIX=agentinbox-"
-
-# Deploy the function code
-cd azure-function
-npm install
-func azure functionapp publish <your-function-app-name> --javascript
 ```
 
-The function uses **function-level auth** — Azure requires a function key (`?code=<key>`) on every request. This is more secure than a simple shared token. Get your function key:
+Useful optional Function App settings:
+
+| Setting | Purpose |
+| --- | --- |
+| `AGENTINBOX_CHAT_ROUTES` | Per-chat default agent mapping such as `{"12345":"hal"}` |
+| `AGENTINBOX_BOT_MAP` | Per-chat reply bot mapping such as `{"12345":"bot_abc"}` |
+| `AGENTINBOX_AGENT_PERSONAS` | Per-agent tone/style config such as `{"hal":{"instructions":"You are HAL. Be calm and concise."},"stressbot":{"instructions":"You are StressBot. Be energetic and crash-hunting focused."}}` |
+| `GROUPME_BOT_ID` | Fallback bot ID when `AGENTINBOX_BOT_MAP` has no entry |
+
+To update deployed personas without hand-writing the Azure CLI command, use:
+
+```powershell
+.\tools\Set-FunctionAppPersonas.ps1 `
+  -FunctionApp <your-function-app-name> `
+  -ResourceGroup agentinbox `
+  -PersonasJson '{"hal":{"instructions":"You are HAL. Be calm and concise."},"stressbot":{"instructions":"You are StressBot. Be energetic and crash-hunting focused."}}'
+```
+
+You can also keep the persona JSON in a file:
+
+```powershell
+.\tools\Set-FunctionAppPersonas.ps1 `
+  -FunctionApp <your-function-app-name> `
+  -ResourceGroup agentinbox `
+  -PersonasFile .\personas.json
+```
+
+Use `-Preview` to validate and print the normalized setting value without
+updating Azure.
+
+### 3. Deploy the webhook code
+
+```powershell
+Set-Location azure-function
+npm install
+func azure functionapp publish <your-function-app-name> --javascript
+Set-Location ..
+```
+
+The Azure Function details and webhook schema are documented further in
+`azure-function\README.md`.
+
+### 4. Point GroupMe at the webhook
+
+Get the function key:
 
 ```powershell
 az functionapp keys list `
@@ -146,406 +168,311 @@ az functionapp keys list `
   --query "functionKeys.default" -o tsv
 ```
 
-### Step 4: Update GroupMe Bot Callback URL
+Set the GroupMe bot callback URL to:
 
-Go back to [dev.groupme.com](https://dev.groupme.com) → your bot → edit, and set the **Callback URL** to:
-
-```
+```text
 https://<your-function-app-name>.azurewebsites.net/api/groupme-callback?code=<your-function-key>
 ```
 
-### Step 5: (Optional) Custom Domain with SSL
-
-If you want a clean URL like `https://inbox.yourdomain.com/api/groupme-callback`:
-
-```powershell
-# 1. Get your domain verification ID
-az functionapp show `
-  --name <your-function-app-name> `
-  --resource-group agentinbox `
-  --query customDomainVerificationId -o tsv
-```
-
-Add two DNS records at your DNS provider (e.g., Cloudflare):
-
-| Type | Name | Value |
-|------|------|-------|
-| TXT | `asuid.inbox` | `<verification-id-from-above>` |
-| CNAME | `inbox` | `<your-function-app-name>.azurewebsites.net` |
-
-> **Cloudflare users:** Set the CNAME to **DNS only** (grey cloud) during setup. Azure must verify the hostname directly. You can enable proxying later.
-
-Wait a minute for DNS propagation, then:
+If you want to upload a bot avatar image to GroupMe's CDN, the repo includes a
+helper script:
 
 ```powershell
-# 2. Add the custom hostname to Azure
-az functionapp config hostname add `
-  --hostname inbox.yourdomain.com `
-  --name <your-function-app-name> `
-  --resource-group agentinbox
-
-# 3. Create a free managed SSL certificate
-az webapp config ssl create `
-  --hostname inbox.yourdomain.com `
-  --name <your-function-app-name> `
-  --resource-group agentinbox
-
-# 4. Bind the certificate (get thumbprint from the ssl create output)
-az webapp config ssl bind `
-  --certificate-thumbprint <thumbprint> `
-  --ssl-type SNI `
-  --name <your-function-app-name> `
-  --resource-group agentinbox
-
-# 5. Enforce HTTPS
-az functionapp update `
-  --name <your-function-app-name> `
-  --resource-group agentinbox `
-  --set httpsOnly=true
+.\scripts\Upload-GroupMeImage.ps1 -Path .\avatar.png
 ```
 
-Update your GroupMe bot callback URL to:
-```
-https://inbox.yourdomain.com/api/groupme-callback?code=<your-function-key>
-```
+By default it reads `GROUPME_ACCESS_TOKEN` from the current environment or a
+nearby `.env` file. Use the returned `Url` value as the bot `avatar_url`.
 
-### Step 6: Configure the Daemon
+### 5. Queue provisioning
+
+The webhook can create queues on first use, so pre-provisioning is optional.
+If you want to create them ahead of time:
 
 ```powershell
-cd agentinbox   # your local clone
-
-# Create .env from the example
-copy .env.example .env
+.\tools\Setup-Queue.ps1 `
+  -ConnectionString "<your-connection-string>" `
+  -Agents "hal,stressbot"
 ```
 
-Edit `.env`:
+## Bring up an additional system
+
+Once the cloud side is deployed, adding another PC is mostly a local setup
+exercise.
+
+### 1. Clone the repo and install dependencies
+
+```powershell
+git clone https://github.com/rtreit/agentinbox.git
+Set-Location agentinbox
+uv sync
+```
+
+### 2. Create `.env`
+
+```powershell
+Copy-Item .env.example .env
+```
+
+At minimum, set:
+
 ```env
-STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
-GROUPME_BOT_ID=<your-bot-id-from-step-2>
-GH_TOKEN=<github-token-for-headless-copilot-auth>
-AGENTINBOX_AGENT_NAME=hal
+STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
+GH_TOKEN=github_pat_or_fine_grained_token_here
+AGENTINBOX_AGENT_NAME=stressbot
+AGENTINBOX_WORKING_DIRECTORY=C:\Users\randy\Git\TerminalStress
+GROUPME_BOT_ID_STRESSBOT=your_stressbot_bot_id
 ```
 
-If you plan to run the daemon as a Windows service in Session 0, set `GH_TOKEN`
-or `GITHUB_TOKEN` in `.env`. Mapping `HOME`/`.copilot` alone can still be
-insufficient for nested headless `copilot.exe` auth.
+Notes:
 
-Test connectivity:
+- `AGENTINBOX_AGENT_NAME` controls the default queue name. If you set
+  `AGENTINBOX_AGENT_NAME=stressbot`, the daemon listens to
+  `agentinbox-stressbot` unless you also set `AGENTINBOX_QUEUE_NAME`.
+- `AGENTINBOX_WORKING_DIRECTORY` is the executor target directory. This is
+  where Copilot, command, or Python executors will run.
+- `AGENTINBOX_COPILOT_MODEL` optionally passes `--model <value>` to the nested
+  Copilot CLI. Leave it unset to keep the current default model selection.
+- `GH_TOKEN` is strongly recommended for Windows service / Session 0 runs. The
+  daemon warns if it detects service mode without a headless auth token.
+- If you only use one bot, `GROUPME_BOT_ID` is enough. Per-agent IDs such as
+  `GROUPME_BOT_ID_STRESSBOT` override the default.
+- Per-agent personality is normally defined centrally in the Azure Function via
+  `AGENTINBOX_AGENT_PERSONAS`, then delivered with each queued directive. Most
+  daemon machines do not need separate local persona config.
+
+### 3. Decide what directory the daemon should execute in
+
+This is the most important distinction when setting up a second machine:
+
+- the Agent Inbox process itself should usually start from the `agentinbox`
+  clone so it can load that clone's `.env` and optional `agentinbox.toml`
+- the executor target repo is configured separately through
+  `AGENTINBOX_WORKING_DIRECTORY` or `--working-directory`
+
+Example:
+
+- Agent Inbox lives at `C:\Users\randy\Git\agentinbox`
+- the daemon loads `.env` from that directory
+- the executor actually works in `C:\Users\randy\Git\TerminalStress`
+
+### 4. Smoke test interactively
+
 ```powershell
-# Peek at the queue (should show empty or any test messages)
-uv run python -m agentinbox peek
+# Confirm the queue resolves the way you expect
+uv run agentinbox peek
 
-# Run a quick one-shot to verify configuration
-uv run python -m agentinbox
+# Consume pending directives without executing them
+uv run agentinbox daemon --dry-run
+
+# Run the real daemon interactively
+uv run agentinbox daemon
 ```
 
-### Step 7: Verify End-to-End
+If your chat and webhook are already wired up, send a test message such as:
 
-Send a test message to your GroupMe chat:
-```
-@@ hello from agentinbox
+```text
+@stressbot pwd
 ```
 
-Then check if it arrived:
+or, for the chat's default agent:
+
+```text
+@@ status
+```
+
+### 5. Auto-launch the interactive daemon at sign-in (Windows)
+
+Use this if you want a visible interactive daemon window each time you sign in.
+Do **not** point the Run key directly at `conhost.exe` or a raw
+`python -m agentinbox daemon` command. That approach is fragile because quoting
+and working-directory differences can leave the console at
+`C:\Windows\System32` and fail before Agent Inbox starts.
+
+Instead, call the helper script that already knows how to find the repo root,
+pick the right Python interpreter, and launch the daemon only if one is not
+already running:
+
 ```powershell
-uv run python -m agentinbox peek
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\Users\randy\Git\agentinbox\src\agentinbox\ensure_daemon.ps1"
 ```
 
-You should see the message in the queue. To consume and process it:
+To register that for the current user at logon:
+
 ```powershell
-uv run python -m agentinbox daemon --dry-run
+$repo = "C:\Users\randy\Git\agentinbox"
+$command = "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$repo\src\agentinbox\ensure_daemon.ps1`""
+
+New-ItemProperty `
+  -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
+  -Name "AgentInboxHal" `
+  -Value $command `
+  -PropertyType String `
+  -Force
 ```
 
-### Step 8: (Optional) Install as Windows Service
+That is the recommended interactive autostart path today. If you want an
+unattended/background install instead, use the Windows service below.
 
-The C# service auto-starts the daemon on boot with crash recovery.
+### 6. Install the Windows service
+
+If the interactive daemon works, you can install the service wrapper on that
+machine.
 
 ```powershell
-# Build the service
-cd service
-dotnet publish -c Release -o publish
+dotnet publish service\AgentInboxService.csproj -c Release -o service\publish
 
-# Install (requires an elevated/admin terminal)
-.\publish\AgentInboxService.exe install
-
-# Start the service
-sc start AgentInboxDaemon
-# Or from the publish directory:
-.\publish\AgentInboxService.exe start
-```
-
-Verify it's running:
-```powershell
-sc query AgentInboxDaemon
-# STATE should be: RUNNING
-```
-
-> **Note:** The executable is at `service\publish\AgentInboxService.exe`. It's not on PATH by default — always use the full path or run from the `service\publish\` directory.
-
-Service management:
-```powershell
-# Full path required unless publish/ is on PATH
+# Requires an elevated PowerShell window
+.\service\publish\AgentInboxService.exe install
+.\service\publish\AgentInboxService.exe start
 .\service\publish\AgentInboxService.exe status
+```
+
+The service wrapper reads `service\publish\agentinbox-service.json`. The
+defaults are usually fine after `uv sync`:
+
+- `pythonPath` -> `.venv\Scripts\python.exe`
+- `scriptPath` -> `-m agentinbox daemon`
+- `workingDirectory` -> `.` (the repo root when published under `service\publish`)
+
+That default `workingDirectory` is usually what you want, because the service
+loads `.env` from there.
+
+Inspect or modify the wrapper configuration with:
+
+```powershell
 .\service\publish\AgentInboxService.exe config show
-.\service\publish\AgentInboxService.exe stop
-.\service\publish\AgentInboxService.exe uninstall
+.\service\publish\AgentInboxService.exe config path
+.\service\publish\AgentInboxService.exe config set restartDelaySeconds 10
 ```
 
-The `agentinbox-service.json` config file (next to the exe) controls:
-```json
-{
-  "pythonPath": ".venv\\Scripts\\python.exe",
-  "scriptPath": "-m agentinbox daemon",
-  "workingDirectory": ".",
-  "restartOnCrash": true,
-  "restartDelaySeconds": 5,
-  "maxRestarts": 10,
-  "maxRestartWindowMinutes": 30,
-  "logDirectory": "logs"
-}
+In most cases, put per-machine runtime settings in `.env` and leave the service
+wrapper config for Python path, restart policy, and other service-specific
+settings.
+
+## Running multiple daemons
+
+A common pattern is one queue per machine or role:
+
+- `agentinbox-hal`
+- `agentinbox-stressbot`
+- `agentinbox-devbot`
+
+Then configure the Function App so those agent names are routable:
+
+```powershell
+az functionapp config appsettings set `
+  --name <your-function-app-name> `
+  --resource-group agentinbox `
+  --settings "AGENTINBOX_AGENTS=hal,stressbot,devbot"
 ```
 
-The service automatically:
-- Restarts the daemon on crash (up to `maxRestarts` within `maxRestartWindowMinutes`)
-- Loads `.env` from the working directory
-- Sets up user profile env vars for Session 0 (Copilot auth)
-- Streams stdout/stderr to `logs/service_*.log`
+Example chat usage:
 
-## Configuration
+- `@hal what user are you running as?`
+- `@stressbot run a 10 minute stress test`
+- `@@ status`
 
-Configuration is loaded in priority order: CLI args > env vars > `agentinbox.toml` > `.env`
+If multiple GroupMe chats share the same infrastructure, use:
 
-### agentinbox.toml
+- `AGENTINBOX_CHAT_ROUTES` to choose the default agent per chat
+- `AGENTINBOX_BOT_MAP` to choose the reply bot per chat
+
+## Optional `agentinbox.toml`
+
+If you prefer a checked-in config file instead of relying on environment
+variables, create `agentinbox.toml` in the repo root:
 
 ```toml
 [agent]
-name = "hal"
+name = "stressbot"
 
 [queue]
-name = "agentinbox-hal"
-connection_string_env = "STORAGE_CONNECTION_STRING"
+name = "agentinbox-stressbot"
 poll_interval = 10
 
 [executor]
-type = "copilot"       # copilot | command | python
-command = ""           # for command/python types
-working_directory = "."
-
-[groupme]
-bot_id_env = "GROUPME_BOT_ID"
-
-# Per-chat bot mapping (group_id -> env var with bot_id)
-[groupme.chat_bots]
-"12345678" = "GROUPME_BOT_ID_CHAT1"
-"87654321" = "GROUPME_BOT_ID_CHAT2"
+type = "copilot"
+copilot_model = "claude-sonnet-4.5"
+working_directory = "C:\\Users\\randy\\Git\\TerminalStress"
 
 [logging]
 directory = "logs"
 ```
 
-### Environment Variables
+Remember that CLI args and `AGENTINBOX_*` environment variables override the
+TOML file.
 
-| Variable | Description |
-|----------|-------------|
-| `STORAGE_CONNECTION_STRING` | Azure Storage connection string |
-| `GROUPME_BOT_ID` | Default GroupMe bot ID for replies |
-| `AGENTINBOX_AGENT_NAME` | Agent name (default: `hal`) |
-| `AGENTINBOX_QUEUE_NAME` | Queue name (default: `agentinbox-{agent}`) |
-| `AGENTINBOX_POLL_INTERVAL` | Poll interval in seconds |
-| `AGENTINBOX_EXECUTOR_TYPE` | Executor type: `copilot`, `command`, `python` |
-| `AGENTINBOX_EXECUTOR_COMMAND` | Command for command/python executors |
-| `AGENTINBOX_LOG_DIR` | Log directory path |
+For Copilot executor model selection, you can use either:
 
-### Azure Function App Settings
+- `AGENTINBOX_COPILOT_MODEL=claude-sonnet-4.5`
+- `[executor].copilot_model = "claude-sonnet-4.5"`
 
-| Setting | Description |
-|---------|-------------|
-| `STORAGE_CONNECTION_STRING` | Azure Storage connection string |
-| `AGENTINBOX_AGENTS` | Comma-separated agent names (e.g., `hal,buildbot`) |
-| `AGENTINBOX_DEFAULT_AGENT` | Default agent for `@@` / `🤖` prefixes (e.g., `hal`) |
-| `AGENTINBOX_QUEUE_PREFIX` | Queue name prefix (default: `agentinbox-`) |
-| `AGENTINBOX_CHAT_ROUTES` | JSON mapping: `group_id → default_agent_name` |
-| `AGENTINBOX_BOT_MAP` | JSON mapping: `group_id → bot_id` for reply routing |
+When unset, Agent Inbox preserves the existing Copilot CLI behavior and does
+not add `--model`.
 
-### CLI Arguments
+## Logs and troubleshooting
 
-```powershell
-uv run python -m agentinbox daemon `
-  --agent-name hal `
-  --queue-name agentinbox-hal `
-  --interval 10 `
-  --executor copilot `
-  --executor-command "" `
-  --config agentinbox.toml
-```
+### Where to look
 
-## Multi-Agent Setup
+- Windows service wrapper logs:
+  - `logs\service_stdout.log`
+  - `logs\service_stderr.log`
+- Structured daemon log:
+  - `<AGENTINBOX_WORKING_DIRECTORY>\logs\daemon.jsonl`
+- Copilot per-task stderr:
+  - `<AGENTINBOX_WORKING_DIRECTORY>\logs\copilot_stderr_<message_id>.log`
 
-Run multiple daemons on different machines, each listening to a different queue:
-
-**PC-A (hal):**
-```powershell
-uv run python -m agentinbox daemon --agent-name hal
-# Listens to queue: agentinbox-hal
-```
-
-**PC-B (buildbot):**
-```powershell
-uv run python -m agentinbox daemon --agent-name buildbot --executor command --executor-command "make {instruction}"
-# Listens to queue: agentinbox-buildbot
-```
-
-**In GroupMe:**
-- `@hal run the tests` → routed to PC-A
-- `@buildbot deploy staging` → routed to PC-B
-- `@@ check status` → routed to the chat's default agent
-
-### Queue Provisioning for Multiple Agents
+### Useful checks
 
 ```powershell
-.\tools\Setup-Queue.ps1 -Agents "hal,buildbot" -ConnectionString $env:STORAGE_CONNECTION_STRING
+Get-Content .\logs\service_stdout.log -Tail 50 -ErrorAction SilentlyContinue
+Get-Content .\logs\service_stderr.log -Tail 50 -ErrorAction SilentlyContinue
+Get-Content C:\path\to\target-repo\logs\daemon.jsonl -Tail 20 -ErrorAction SilentlyContinue
 ```
 
-Or via the Azure CLI:
-```powershell
-az storage queue create --name agentinbox-hal --connection-string "<conn-string>"
-az storage queue create --name agentinbox-buildbot --connection-string "<conn-string>"
-```
+### Common problems
 
-Update the Function App settings to register the new agents:
-```powershell
-az functionapp config appsettings set `
-  --name <your-function-app-name> `
-  --resource-group agentinbox `
-  --settings "AGENTINBOX_AGENTS=hal,buildbot"
-```
+#### Service mode says "No authentication information found"
 
-## Directed Message Prefixes
+Set `GH_TOKEN` (or `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN`) in `.env`, then
+restart the service. This is the supported headless auth path for nested
+Copilot runs under Session 0.
 
-| Prefix | Behavior |
-|--------|----------|
-| `@hal <cmd>` | Routes to hal's queue |
-| `@buildbot <cmd>` | Routes to buildbot's queue |
-| `@@ <cmd>` | Routes to chat's default agent |
-| `🤖 <cmd>` | Same as `@@` |
-| `hal: <cmd>` | Routes to hal's queue |
-| `/hal <cmd>` | Routes to hal's queue |
-| `!hal <cmd>` | Routes to hal's queue |
+#### The daemon says the queue does not exist
 
-## Executors
+For a brand-new agent, this usually just means no routed message has created the
+queue yet. Current builds treat that as an idle queue and keep polling quietly.
 
-### Copilot CLI (default)
-Launches `copilot -p <prompt> --yolo --autopilot`. Handles Session 0 (Windows service) by skipping conhost.
+If you want the queue provisioned ahead of time, create it with
+`tools\Setup-Queue.ps1` or `az storage queue create`.
 
-### Shell Command
-Runs an arbitrary command. Use `{instruction}` as placeholder:
-```toml
-[executor]
-type = "command"
-command = "python my_handler.py {instruction}"
-```
+If the queue still never appears after sending a directed message, make sure the
+Azure Function is correctly configured so it can create the queue on first
+routed message.
 
-### Python Script
-Pipes the instruction to a Python script via stdin:
-```toml
-[executor]
-type = "python"
-command = "scripts/handler.py"
-```
+#### No reply appears in GroupMe
 
-## Message Schema
+Check, in order:
 
-### v2 (current)
+1. the Function App settings (`AGENTINBOX_AGENTS`, `AGENTINBOX_CHAT_ROUTES`,
+   `AGENTINBOX_BOT_MAP`)
+2. the daemon's resolved queue (`uv run agentinbox peek`)
+3. the daemon/service logs
+4. the bot ID values in `.env`
 
-```json
-{
-  "schema": "groupme-directed-message/v2",
-  "queuedAtUtc": "2026-03-27T12:00:00.000Z",
-  "targetAgent": "hal",
-  "targetQueue": "agentinbox-hal",
-  "directedReason": "prefix",
-  "source": {
-    "provider": "groupme",
-    "messageId": "abc123",
-    "groupId": "12345678",
-    "createdAtEpoch": 1234567890,
-    "replyBotId": "bot_id_for_this_chat"
-  },
-  "sender": {
-    "id": "sender123",
-    "name": "Randy",
-    "type": "user"
-  },
-  "message": {
-    "text": "run the tests",
-    "attachments": []
-  }
-}
-```
+## Project structure
 
-### v1 (backward compatible)
-
-Same as v2 but without `targetQueue` and `source.replyBotId`. Daemons accept both.
-
-## Project Structure
-
-```
+```text
 agentinbox/
-├── .github/                  # Copilot instructions, agents, hooks
-├── .vscode/                  # MCP server config
-├── src/agentinbox/           # Python package
-│   ├── __main__.py           # CLI entry point
-│   ├── config.py             # Configuration loading
-│   ├── daemon.py             # Main daemon loop
-│   ├── inbox.py              # Azure Queue consumer
-│   ├── notify.py             # GroupMe poster
-│   ├── task_tracker.py       # In-flight task state
-│   ├── executor.py           # Executor interface
-│   └── executors/            # Executor implementations
-│       ├── copilot.py        # Copilot CLI
-│       ├── command.py        # Shell command
-│       └── python_script.py  # Python script
-├── azure-function/           # Azure Function webhook
-├── service/                  # C# Windows service
-├── tools/                    # PowerShell helpers
-├── pyproject.toml            # uv project config
-└── agentinbox.toml           # Runtime config (optional)
-```
-
-## Troubleshooting
-
-### Daemon crashes with UnicodeEncodeError
-When running as a Windows service (Session 0), the console uses cp1252 encoding which can't handle emoji. The daemon sets `sys.stdout.reconfigure(errors="replace")` automatically, but if you see encoding errors in `logs/service_*.log`, ensure you're running the latest code.
-
-### "unrecognized arguments" with CLI flags
-Global flags like `--agent-name` must come **after** the subcommand:
-```powershell
-# Correct:
-uv run python -m agentinbox daemon --agent-name hal
-
-# Also correct (before the subcommand):
-uv run python -m agentinbox --agent-name hal daemon
-```
-
-### Function returns 401
-The function uses Azure function-level auth. Ensure you're including `?code=<your-function-key>` in the callback URL. Get the key with:
-```powershell
-az functionapp keys list --name <app-name> --resource-group agentinbox --query "functionKeys.default" -o tsv
-```
-
-### Service won't start (Access Denied)
-Service management requires an **elevated (admin) terminal**. Right-click your terminal → Run as Administrator, then:
-```powershell
-sc start AgentInboxDaemon
-```
-
-### Messages not being routed
-1. Check that the agent name is in `AGENTINBOX_AGENTS` on the Function App
-2. Verify queues exist: `az storage queue list --connection-string "<conn-string>" -o table`
-3. Test the function directly:
-```powershell
-$body = '{"sender_type":"user","text":"@@ test","name":"Test","id":"1","sender_id":"1","group_id":"1"}'
-Invoke-RestMethod -Uri "https://<your-url>/api/groupme-callback?code=<key>" -Method POST -ContentType "application/json" -Body $body
+|-- src/agentinbox/      Python package
+|-- azure-function/      GroupMe webhook
+|-- scripts/             Helper scripts
+|-- service/             Windows service wrapper
+|-- tools/               Queue setup and diagnostics
+|-- .env.example         Environment variable template
+|-- pyproject.toml       uv project metadata
+`-- README.md
 ```
 
 ## License

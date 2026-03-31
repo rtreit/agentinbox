@@ -23,12 +23,24 @@ Messages are routed to agent-specific queues based on directed prefixes:
 |----------|----------|-------------|
 | `GROUPME_CALLBACK_TOKEN` | No | Token to authenticate GroupMe webhook callbacks. If unset, all requests are accepted. |
 | `STORAGE_CONNECTION_STRING` | **Yes** | Azure Storage connection string for queue access. |
-| `AGENTINBOX_AGENTS` | **Yes** | Comma-separated list of known agent names (e.g., `hal,buildbot`). |
+| `AGENTINBOX_AGENTS` | **Yes** | Comma-separated list of known agent names (e.g., `hal,devbot`). |
 | `AGENTINBOX_DEFAULT_AGENT` | No | Default agent name when no specific agent is targeted. Default: `hal`. |
 | `AGENTINBOX_QUEUE_PREFIX` | No | Queue name prefix. Default: `agentinbox-`. |
-| `AGENTINBOX_CHAT_ROUTES` | No | JSON mapping `group_id` → default agent name (e.g., `{"12345":"hal","67890":"buildbot"}`). |
+| `AGENTINBOX_CHAT_ROUTES` | No | JSON mapping `group_id` → default agent name (e.g., `{"12345":"hal","67890":"devbot"}`). |
 | `AGENTINBOX_BOT_MAP` | No | JSON mapping `group_id` → bot_id for replies (e.g., `{"12345":"bot_abc","67890":"bot_xyz"}`). |
+| `AGENTINBOX_AGENT_PERSONAS` | No | JSON mapping `agent_name` → persona definition. Persona affects tone/style/identity only and is attached to queued directives. |
 | `GROUPME_BOT_ID` | No | Fallback bot ID used when `AGENTINBOX_BOT_MAP` has no entry for the group. |
+
+To update personas on a deployed Function App, you can use the repo helper:
+
+```powershell
+.\tools\Set-FunctionAppPersonas.ps1 `
+  -FunctionApp <your-function-app-name> `
+  -ResourceGroup <your-resource-group> `
+  -PersonasFile .\personas.json
+```
+
+Use `-Preview` to validate and print the normalized JSON without updating Azure.
 
 ## Message Schema (v2)
 
@@ -51,6 +63,11 @@ Messages are routed to agent-specific queues based on directed prefixes:
     "name": "Randy",
     "type": "user"
   },
+  "persona": {
+    "id": "hal",
+    "version": "1",
+    "instructions": "You are HAL. Be calm, concise, and professional."
+  },
   "message": {
     "text": "check the logs for crashes",
     "attachments": []
@@ -72,9 +89,10 @@ cat > local.settings.json <<'EOF'
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true",
-    "AGENTINBOX_AGENTS": "hal,buildbot",
+    "AGENTINBOX_AGENTS": "hal,devbot",
     "AGENTINBOX_DEFAULT_AGENT": "hal",
-    "AGENTINBOX_QUEUE_PREFIX": "agentinbox-"
+    "AGENTINBOX_QUEUE_PREFIX": "agentinbox-",
+    "AGENTINBOX_AGENT_PERSONAS": "{\"hal\":{\"instructions\":\"You are HAL. Be calm and concise.\"},\"devbot\":{\"instructions\":\"You are DevBot. Be concise and development-focused.\"}}"
   }
 }
 EOF
@@ -132,3 +150,4 @@ Configure the environment variables listed above in the Azure Function App's **C
 - Queue names follow the pattern `agentinbox-{agentname}` (lowercase, alphanumeric + hyphens).
 - Messages are base64-encoded JSON, as required by Azure Storage Queues.
 - The `replyBotId` field tells the consuming daemon which GroupMe bot to use when posting replies back to the chat.
+- The optional `persona` block is included when `AGENTINBOX_AGENT_PERSONAS` defines one for the routed agent.
