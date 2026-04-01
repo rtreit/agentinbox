@@ -57,6 +57,10 @@ Supports multiple daemons on different PCs listening to different queues. The de
 - `service/` — C# Windows service (.NET 8) for running the daemon as a service
 - `tools/` — PowerShell helper scripts
 
+## Pull Request Reviews
+
+- Never approve a PR that has active (unresolved) review comments. All comments must be resolved before approving.
+
 ## Conventions
 
 - Use `uv` for all Python packaging (never `pip`).
