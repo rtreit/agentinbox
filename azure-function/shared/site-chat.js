@@ -24,6 +24,24 @@ function parseJsonEnv(envVar, fallback) {
   }
 }
 
+function parseStringMap(envVar) {
+  const raw = parseJsonEnv(envVar, {});
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const mapKey = String(key || "").trim().toLowerCase();
+    const mapValue = typeof value === "string" ? value.trim() : "";
+    if (mapKey && mapValue) {
+      normalized[mapKey] = mapValue;
+    }
+  }
+
+  return normalized;
+}
+
 function normalizePersonaDefinition(agentName, raw) {
   if (!raw) return null;
 
@@ -95,6 +113,7 @@ function loadConfig() {
     defaultAgent: (process.env.AGENTINBOX_DEFAULT_AGENT || "hal").toLowerCase(),
     queuePrefix: process.env.AGENTINBOX_QUEUE_PREFIX || "agentinbox-",
     agentPersonas: parsePersonaMap("AGENTINBOX_AGENT_PERSONAS"),
+    siteQueueOverrides: parseStringMap("SITE_CHAT_QUEUE_OVERRIDES"),
     storageConnectionString: process.env.STORAGE_CONNECTION_STRING || "",
     siteToken: process.env.SITE_CHAT_SEND_TOKEN || "",
   };
@@ -173,7 +192,7 @@ function buildSiteEnvelope(body, config) {
     ? body.siteName.trim()
     : "rtreitweb";
 
-  const targetQueue = `${config.queuePrefix}${targetAgent}`;
+  const targetQueue = config.siteQueueOverrides[targetAgent] || `${config.queuePrefix}${targetAgent}`;
   const persona = config.agentPersonas[targetAgent] || null;
   const envelope = {
     schema: "groupme-directed-message/v2",

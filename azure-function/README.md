@@ -31,6 +31,7 @@ Messages are routed to agent-specific queues based on directed prefixes:
 | `AGENTINBOX_AGENT_PERSONAS` | No | JSON mapping `agent_name` → persona definition. Persona affects tone/style/identity only and is attached to queued directives. |
 | `GROUPME_BOT_ID` | No | Fallback bot ID used when `AGENTINBOX_BOT_MAP` has no entry for the group. |
 | `SITE_CHAT_SEND_TOKEN` | No | Shared secret required by the `site-chat-config` and `site-chat-send` endpoints. |
+| `SITE_CHAT_QUEUE_OVERRIDES` | No | Optional JSON mapping `agent_name` → queue name for site-chat traffic only (e.g., `{"hal":"agentinbox-hal-site"}`). |
 
 To update personas on a deployed Function App, you can use the repo helper:
 
@@ -148,6 +149,15 @@ Both endpoints require:
 
 - the normal Azure Function key (`?code=...`)
 - an `X-AgentInbox-Site-Token` header matching `SITE_CHAT_SEND_TOKEN`
+
+If you want the web UI to route an agent through a different daemon/queue than
+GroupMe uses, set `SITE_CHAT_QUEUE_OVERRIDES`. For example, this routes site
+chat for `hal` to `agentinbox-hal-site` while leaving normal GroupMe `hal`
+traffic on `agentinbox-hal`:
+
+```json
+{"hal":"agentinbox-hal-site"}
+```
 
 Example request:
 
