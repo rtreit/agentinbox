@@ -25,15 +25,31 @@ function parseJsonEnv(envVar, fallback) {
 }
 
 function parseStringMap(envVar) {
-  const raw = parseJsonEnv(envVar, {});
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  const envValue = process.env[envVar];
+  if (!envValue) {
     return {};
   }
 
+  const raw = parseJsonEnv(envVar, null);
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(raw)) {
+      const mapKey = String(key || "").trim().toLowerCase();
+      const mapValue = typeof value === "string" ? value.trim() : "";
+      if (mapKey && mapValue) {
+        normalized[mapKey] = mapValue;
+      }
+    }
+
+    return normalized;
+  }
+
   const normalized = {};
-  for (const [key, value] of Object.entries(raw)) {
-    const mapKey = String(key || "").trim().toLowerCase();
-    const mapValue = typeof value === "string" ? value.trim() : "";
+  const trimmed = String(envValue).trim().replace(/^\{|\}$/g, "");
+  for (const entry of trimmed.split(",")) {
+    const [key, ...rest] = entry.split(":");
+    const mapKey = String(key || "").trim().toLowerCase().replace(/^["']|["']$/g, "");
+    const mapValue = rest.join(":").trim().replace(/^["']|["']$/g, "");
     if (mapKey && mapValue) {
       normalized[mapKey] = mapValue;
     }
