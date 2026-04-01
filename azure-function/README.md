@@ -30,6 +30,7 @@ Messages are routed to agent-specific queues based on directed prefixes:
 | `AGENTINBOX_BOT_MAP` | No | JSON mapping `group_id` → bot_id for replies (e.g., `{"12345":"bot_abc","67890":"bot_xyz"}`). |
 | `AGENTINBOX_AGENT_PERSONAS` | No | JSON mapping `agent_name` → persona definition. Persona affects tone/style/identity only and is attached to queued directives. |
 | `GROUPME_BOT_ID` | No | Fallback bot ID used when `AGENTINBOX_BOT_MAP` has no entry for the group. |
+| `SITE_CHAT_SEND_TOKEN` | No | Shared secret required by the `site-chat-config` and `site-chat-send` endpoints. |
 
 To update personas on a deployed Function App, you can use the repo helper:
 
@@ -135,6 +136,40 @@ curl -X POST http://localhost:7071/api/groupme-callback \
   }'
 ```
 
+### Site chat endpoints
+
+The same Function App can also serve a web-based chat transport for sites such
+as `rtreitweb`.
+
+- `GET /api/site-chat-config` — returns the configured agent list and personas
+- `POST /api/site-chat-send` — validates a site-originated chat message and enqueues a v2 directive
+
+Both endpoints require:
+
+- the normal Azure Function key (`?code=...`)
+- an `X-AgentInbox-Site-Token` header matching `SITE_CHAT_SEND_TOKEN`
+
+Example request:
+
+```bash
+curl -X POST "https://<your-function-app>.azurewebsites.net/api/site-chat-send?code=<function-key>" \
+  -H "Content-Type: application/json" \
+  -H "X-AgentInbox-Site-Token: <shared-site-token>" \
+  -d '{
+    "siteName": "rtreitweb",
+    "threadId": "thread-123",
+    "messageId": "user-456",
+    "targetAgent": "devbot",
+    "text": "Check the latest deployment logs",
+    "sender": {
+      "id": "user@example.com",
+      "name": "Randy"
+    },
+    "replyWebhookUrl": "https://rtreit.com/api/chat-reply",
+    "replyAuthToken": "<reply-token>"
+  }'
+```
+
 ## Deploying
 
 ```bash
@@ -151,3 +186,4 @@ Configure the environment variables listed above in the Azure Function App's **C
 - Messages are base64-encoded JSON, as required by Azure Storage Queues.
 - The `replyBotId` field tells the consuming daemon which GroupMe bot to use when posting replies back to the chat.
 - The optional `persona` block is included when `AGENTINBOX_AGENT_PERSONAS` defines one for the routed agent.
+- Site-originated messages can set `source.provider = "site"` along with `threadId`, `replyWebhookUrl`, and `replyAuthToken` so daemon replies can go back to a web UI instead of GroupMe.

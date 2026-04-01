@@ -29,6 +29,7 @@ from .executors.command import CommandExecutor
 from .executors.python_script import PythonScriptExecutor
 from .inbox import get_all_directives
 from .notify import post as groupme_post
+from .reply_router import post_directive_event
 from . import task_tracker
 
 
@@ -109,21 +110,27 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
     instruction = directive["instruction"]
     sender_name = directive["sender_name"]
     message_id = directive["message_id"]
-    reply_bot_id = config.bot_id_for_chat(directive.get("group_id")) or directive.get(
-        "reply_bot_id"
-    )
+    persona = directive.get("persona") or {}
 
     _log_entry(log_dir, {
         "event": "dispatch",
         "sender": sender_name,
         "instruction": instruction[:200],
         "message_id": message_id,
+        "persona_id": persona.get("id") or None,
+        "persona_version": persona.get("version") or None,
     })
 
     # Try quick handle first
     quick = _try_quick_handle(instruction)
     if quick:
-        groupme_post(quick, bot_id=reply_bot_id)
+        if not post_directive_event(directive, config, status="completed", text=quick, success=True):
+            _log_entry(log_dir, {
+                "event": "reply_delivery_failed",
+                "message_id": message_id,
+                "status": "completed",
+                "transport": directive.get("source_provider") or "groupme",
+            })
         _log_entry(log_dir, {
             "event": "quick_handle",
             "message_id": message_id,
@@ -140,6 +147,9 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
         message_id=message_id,
         working_directory=config.resolved_working_directory,
         raw_text=directive.get("raw_text", ""),
+        persona_id=persona.get("id", ""),
+        persona_version=persona.get("version", ""),
+        persona_instructions=persona.get("instructions", ""),
     )
 
     start = time.time()
@@ -155,7 +165,20 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
         if len(reply_text) > 1000:
             reply_text = reply_text[:997] + "..."
 
-        groupme_post(reply_text, bot_id=reply_bot_id)
+        reply_status = "completed" if result.success else "failed"
+        if not post_directive_event(
+            directive,
+            config,
+            status=reply_status,
+            text=reply_text,
+            success=result.success,
+        ):
+            _log_entry(log_dir, {
+                "event": "reply_delivery_failed",
+                "message_id": message_id,
+                "status": reply_status,
+                "transport": directive.get("source_provider") or "groupme",
+            })
 
         if result.success:
             task_tracker.track_completed(log_dir, message_id)
@@ -169,18 +192,28 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
             "elapsed_seconds": round(elapsed, 1),
             "reply_chars": len(reply_text),
             "success": result.success,
+            "persona_id": persona.get("id") or None,
+            "persona_version": persona.get("version") or None,
         })
 
     except Exception as exc:
         elapsed = time.time() - start
         error_msg = f"🤖 Error processing task: {exc}"
-        groupme_post(error_msg, bot_id=reply_bot_id)
+        if not post_directive_event(directive, config, status="failed", text=error_msg, success=False):
+            _log_entry(log_dir, {
+                "event": "reply_delivery_failed",
+                "message_id": message_id,
+                "status": "failed",
+                "transport": directive.get("source_provider") or "groupme",
+            })
         task_tracker.track_failed(log_dir, message_id, str(exc))
         _log_entry(log_dir, {
             "event": "error",
             "message_id": message_id,
             "error": str(exc),
             "elapsed_seconds": round(elapsed, 1),
+            "persona_id": persona.get("id") or None,
+            "persona_version": persona.get("version") or None,
         })
 
 

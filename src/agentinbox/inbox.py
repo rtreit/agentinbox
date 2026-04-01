@@ -25,7 +25,9 @@ for _stream in (sys.stdout, sys.stderr):
 from azure.storage.queue import QueueClient
 
 from .config import Config
-from .notify import post as groupme_post
+from .reply_router import post_directive_event
+
+MAX_PERSONA_INSTRUCTIONS = 1200
 
 
 def _get_queue_client(config: Config) -> QueueClient:
@@ -99,6 +101,39 @@ def _extract_instruction(text: str, agent_name: str) -> str:
     return stripped
 
 
+def _normalize_persona(raw: object, target_agent: str) -> dict | None:
+    """Normalize optional persona metadata from the queue envelope."""
+    if isinstance(raw, str):
+        raw = {"instructions": raw}
+
+    if not isinstance(raw, dict):
+        return None
+
+    instructions = raw.get("instructions")
+    if not isinstance(instructions, str):
+        return None
+
+    instructions = instructions.strip()
+    if not instructions:
+        return None
+
+    persona_id = raw.get("id")
+    if not isinstance(persona_id, str) or not persona_id.strip():
+        persona_id = target_agent
+
+    version = raw.get("version")
+    if isinstance(version, (int, float)):
+        version = str(version)
+    elif not isinstance(version, str):
+        version = ""
+
+    return {
+        "id": persona_id.strip(),
+        "version": version.strip(),
+        "instructions": instructions[:MAX_PERSONA_INSTRUCTIONS],
+    }
+
+
 def peek_messages(config: Config, max_messages: int = 5) -> list[dict]:
     """Peek at queue messages without consuming them."""
     client = _get_queue_client(config)
@@ -146,15 +181,23 @@ def process_one(config: Config, seen_ids: set[str] | None = None) -> dict | None
         return None
 
     sender = parsed.get("sender", {})
+    sender_id = str(sender.get("id") or "").strip()
     sender_name = sender.get("name", "Unknown")
     message_id = parsed.get("source", {}).get("messageId", msg.id)
+    target_agent = parsed.get("targetAgent", config.agent_name)
     text = parsed.get("message", {}).get("text", "")
-    instruction = _extract_instruction(text, config.agent_name)
+    instruction = _extract_instruction(text, target_agent)
+    persona = _normalize_persona(parsed.get("persona"), target_agent)
 
     # Extract reply routing info (v2 schema)
     source = parsed.get("source", {})
+    source_provider = str(source.get("provider") or "groupme").strip().lower()
+    site_name = str(source.get("siteName") or "").strip()
+    thread_id = str(source.get("threadId") or "").strip()
     group_id = source.get("groupId")
     reply_bot_id = source.get("replyBotId")
+    reply_webhook_url = str(source.get("replyWebhookUrl") or "").strip()
+    reply_auth_token = str(source.get("replyAuthToken") or "").strip()
 
     if seen_ids is not None and message_id in seen_ids:
         print(f"  skip duplicate before ack: {message_id}")
@@ -163,21 +206,31 @@ def process_one(config: Config, seen_ids: set[str] | None = None) -> dict | None
 
     print(f"  [{sender_name}] {instruction}")
 
-    # Acknowledge receipt
-    ack_bot_id = config.bot_id_for_chat(group_id) or reply_bot_id
-    groupme_post("🫡", bot_id=ack_bot_id)
-
-    # Delete from queue — we've accepted responsibility
-    client.delete_message(msg)
-
-    return {
+    directive = {
         "instruction": instruction,
         "sender_name": sender_name,
+        "sender_id": sender_id,
         "message_id": message_id,
         "raw_text": text,
         "group_id": group_id,
         "reply_bot_id": reply_bot_id,
+        "reply_webhook_url": reply_webhook_url,
+        "reply_auth_token": reply_auth_token,
+        "source_provider": source_provider,
+        "site_name": site_name,
+        "thread_id": thread_id,
+        "target_agent": target_agent,
+        "persona": persona,
     }
+
+    # Acknowledge receipt
+    if not post_directive_event(directive, config, status="accepted"):
+        print(f"  warning: failed to send acceptance update for {message_id}")
+
+    # Delete from queue — we've accepted responsibility
+    client.delete_message(msg)
+
+    return directive
 
 
 def get_all_directives(config: Config, pre_seen_ids: set[str] | None = None) -> list[dict]:

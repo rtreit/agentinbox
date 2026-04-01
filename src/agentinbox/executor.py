@@ -18,6 +18,9 @@ class ExecutionContext:
     message_id: str
     working_directory: str = "."
     raw_text: str = ""
+    persona_id: str = ""
+    persona_version: str = ""
+    persona_instructions: str = ""
     env: dict[str, str] = field(default_factory=dict)
 
 

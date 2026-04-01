@@ -123,6 +123,7 @@ Useful optional Function App settings:
 | `AGENTINBOX_BOT_MAP` | Per-chat reply bot mapping such as `{"12345":"bot_abc"}` |
 | `AGENTINBOX_AGENT_PERSONAS` | Per-agent tone/style config such as `{"hal":{"instructions":"You are HAL. Be calm and concise."},"stressbot":{"instructions":"You are StressBot. Be energetic and crash-hunting focused."}}` |
 | `GROUPME_BOT_ID` | Fallback bot ID when `AGENTINBOX_BOT_MAP` has no entry |
+| `SITE_CHAT_SEND_TOKEN` | Shared secret required by the Azure Function `site-chat-config` and `site-chat-send` endpoints |
 
 To update deployed personas without hand-writing the Azure CLI command, use:
 
@@ -156,6 +157,21 @@ Set-Location ..
 
 The Azure Function details and webhook schema are documented further in
 `azure-function\README.md`.
+
+### Optional: site chat transport
+
+If you want a web UI instead of GroupMe, `rtreitweb` can call the Agent Inbox
+Function App directly and still use the same queue/executor pipeline.
+
+The Function App exposes:
+
+- `GET /api/site-chat-config`
+- `POST /api/site-chat-send`
+
+Both endpoints require the normal function key plus a shared
+`SITE_CHAT_SEND_TOKEN` header (`X-AgentInbox-Site-Token`). The site can enqueue
+standard v2 directives with `source.provider = "site"`, and the daemon can post
+acceptance/final replies back to a site webhook instead of GroupMe.
 
 ### 4. Point GroupMe at the webhook
 
