@@ -46,7 +46,7 @@ def _create_executor(config: Config) -> Executor:
     """Create an executor based on config."""
     exec_type = config.executor_type.lower()
     if exec_type == "copilot":
-        return CopilotExecutor()
+        return CopilotExecutor(copilot_command=config.copilot_command or None)
     elif exec_type == "command":
         return CommandExecutor(config.executor_command)
     elif exec_type == "python":
@@ -117,6 +117,8 @@ def _dispatch_directive(directive: dict, config: Config, executor: Executor, log
         "sender": sender_name,
         "instruction": instruction[:200],
         "message_id": message_id,
+        "source_provider": directive.get("source_provider") or "groupme",
+        "has_reply_url": bool(directive.get("reply_webhook_url")),
         "persona_id": persona.get("id") or None,
         "persona_version": persona.get("version") or None,
     })

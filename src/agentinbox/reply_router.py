@@ -20,7 +20,10 @@ def _post_site_reply(
     payload: dict,
 ) -> bool:
     data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "AgentInbox/1.0",
+    }
     if auth_token:
         headers[SITE_REPLY_TOKEN_HEADER] = auth_token
 
@@ -31,11 +34,18 @@ def _post_site_reply(
         method="POST",
     )
 
+    print(f"  [site-reply] POST {reply_url} status={payload.get('status')} "
+          f"thread={payload.get('threadId', '?')[:12]} "
+          f"text={len(payload.get('text') or '')} chars "
+          f"auth={'yes' if auth_token else 'no'}", file=sys.stderr)
+
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="replace")[:200]
+            print(f"  [site-reply] response {resp.status}: {body}", file=sys.stderr)
             return resp.status in (200, 201, 202, 204)
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-        print(f"warning: site reply post failed: {exc}", file=sys.stderr)
+        print(f"  [site-reply] FAILED: {exc}", file=sys.stderr)
         return False
 
 
@@ -73,10 +83,15 @@ def post_directive_event(
 ) -> bool:
     """Send an event update for a directive using its configured reply transport."""
     reply_url = str(directive.get("reply_webhook_url") or "").strip()
+    source_provider = directive.get("source_provider", "groupme")
     if reply_url:
         payload = _build_site_payload(directive, config, status, text=text, success=success)
         auth_token = str(directive.get("reply_auth_token") or "").strip() or None
         return _post_site_reply(reply_url, auth_token, payload)
+
+    if source_provider == "site":
+        print(f"  warning: site message {directive.get('message_id')} has no "
+              f"reply_webhook_url, falling back to GroupMe", file=sys.stderr)
 
     bot_id = config.bot_id_for_chat(directive.get("group_id")) or directive.get("reply_bot_id")
     if status == "accepted":
