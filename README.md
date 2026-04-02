@@ -504,3 +504,5 @@ agentinbox/
 ## License
 
 MIT
+
+No agents were harmed in the making of this README.
