@@ -85,6 +85,8 @@ def post_directive_event(
     reply_url = str(directive.get("reply_webhook_url") or "").strip()
     source_provider = directive.get("source_provider", "groupme")
     if reply_url:
+        if status == "accepted" and not text:
+            text = "🫡"
         payload = _build_site_payload(directive, config, status, text=text, success=success)
         auth_token = str(directive.get("reply_auth_token") or "").strip() or None
         return _post_site_reply(reply_url, auth_token, payload)
