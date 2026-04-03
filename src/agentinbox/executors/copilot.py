@@ -148,8 +148,19 @@ def _headless_auth_warning(env: dict[str, str]) -> str | None:
 class CopilotExecutor(Executor):
     """Execute instructions via the Copilot CLI."""
 
-    def __init__(self, copilot_path: str | None = None):
-        self._copilot_path = copilot_path or _find_copilot()
+    def __init__(
+        self,
+        copilot_path: str | None = None,
+        copilot_command: str | None = None,
+    ):
+        if copilot_command:
+            # e.g. "agency copilot" → binary="agency", prefix_args=["copilot"]
+            parts = copilot_command.split()
+            self._copilot_path = shutil.which(parts[0]) or parts[0]
+            self._prefix_args = parts[1:]
+        else:
+            self._copilot_path = copilot_path or _find_copilot()
+            self._prefix_args: list[str] = []
 
     def name(self) -> str:
         return "CopilotExecutor"
@@ -228,6 +239,8 @@ class CopilotExecutor(Executor):
         config_dir = _config_dir_from_env(clean_env)
 
         ps_arg_items = []
+        for prefix in self._prefix_args:
+            ps_arg_items.append(f"'{_powershell_literal(prefix)}'")
         if config_dir is not None:
             ps_arg_items.extend([
                 "'--config-dir'",
@@ -246,7 +259,9 @@ class CopilotExecutor(Executor):
         if in_session_zero:
             copilot_invoke += " 2> $stderrPath"
 
-        # Build the command
+        # Build the command.  Use 'Continue' for the copilot invocation so
+        # stderr output from native commands (copilot.CMD) doesn't become a
+        # terminating error under $ErrorActionPreference = 'Stop'.
         ps_command = (
             "$ErrorActionPreference = 'Stop'; "
             f"$statusPath = '{_powershell_literal(str(status_path))}'; "
@@ -255,6 +270,7 @@ class CopilotExecutor(Executor):
             "try { "
             f"$p = '{_powershell_literal(launch_prompt)}'; "
             f"Set-Location -LiteralPath '{_powershell_literal(str(Path(ctx.working_directory).resolve()))}'; "
+            "$ErrorActionPreference = 'Continue'; "
             f"{copilot_invoke}; "
             "$code = $LASTEXITCODE; "
             "} catch { "

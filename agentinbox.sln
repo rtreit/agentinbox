@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "service", "service", "{226567F5-DD15-7888-5BF1-C4407778305A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AgentInboxService", "service\AgentInboxService.csproj", "{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5BB26F58-A7CC-3AB3-A33B-CD023FE91BB8} = {226567F5-DD15-7888-5BF1-C4407778305A}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8461C4D3-58D7-4689-AC77-5EA21CDDFA1B}
+	EndGlobalSection
+EndGlobal

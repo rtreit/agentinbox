@@ -37,6 +37,7 @@ class Config:
     # Executor settings
     executor_type: str = "copilot"  # copilot | command | python
     executor_command: str = ""
+    copilot_command: str = ""  # e.g. "agency copilot" to wrap copilot CLI
     working_directory: str = "."
 
     # GroupMe settings
@@ -106,6 +107,8 @@ def _apply_toml(cfg: Config, data: dict) -> None:
         cfg.executor_type = executor["type"]
     if "command" in executor:
         cfg.executor_command = executor["command"]
+    if "copilot_command" in executor:
+        cfg.copilot_command = executor["copilot_command"]
     if "working_directory" in executor:
         cfg.working_directory = executor["working_directory"]
 
@@ -128,6 +131,7 @@ def _apply_env(cfg: Config) -> None:
         "AGENTINBOX_POLL_INTERVAL": "poll_interval",
         "AGENTINBOX_EXECUTOR_TYPE": "executor_type",
         "AGENTINBOX_EXECUTOR_COMMAND": "executor_command",
+        "AGENTINBOX_COPILOT_COMMAND": "copilot_command",
         "AGENTINBOX_LOG_DIR": "log_directory",
         "AGENTINBOX_WORKING_DIRECTORY": "working_directory",
     }
@@ -152,6 +156,8 @@ def _apply_cli(cfg: Config, args: argparse.Namespace) -> None:
         cfg.executor_type = args.executor
     if hasattr(args, "executor_command") and args.executor_command:
         cfg.executor_command = args.executor_command
+    if hasattr(args, "copilot_command") and args.copilot_command:
+        cfg.copilot_command = args.copilot_command
     if hasattr(args, "working_directory") and args.working_directory:
         cfg.working_directory = args.working_directory
     if hasattr(args, "config") and args.config:

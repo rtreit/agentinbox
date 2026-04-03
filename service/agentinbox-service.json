@@ -2,7 +2,7 @@
   "pythonPath": ".venv\\Scripts\\python.exe",
   "scriptPath": "-m agentinbox daemon",
   "workingDirectory": ".",
-  "arguments": "--agent-name hal",
+  "arguments": "--agent-name devbot",
   "restartOnCrash": true,
   "restartDelaySeconds": 5,
   "maxRestarts": 10,
