@@ -92,6 +92,31 @@ def _read_exit_code(path: Path) -> int | None:
         return None
 
 
+TIMEOUT_GRACE_SECONDS = 30
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Kill a process and all its descendant processes on Windows."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def _wait_for_reply(reply_file: Path, grace_seconds: int) -> bool:
+    """Wait up to *grace_seconds* for the reply file to appear."""
+    deadline = time.time() + grace_seconds
+    while time.time() < deadline:
+        if reply_file.exists() and reply_file.stat().st_size > 0:
+            return True
+        time.sleep(1)
+    return False
+
+
 def _build_clean_env() -> dict[str, str]:
     """Remove shell/tooling env vars that can perturb nested Copilot launches."""
     clean: dict[str, str] = {}
@@ -320,19 +345,25 @@ class CopilotExecutor(Executor):
                         break
                     time.sleep(1)
                 if exit_code is None:
-                    if proc.poll() is None:
-                        proc.kill()
-                    return ExecutionResult(
-                        success=False,
-                        reply_text="Task timed out after 1 hour.",
-                        exit_code=-1,
-                        error="timeout",
-                    )
+                    # Deadline reached — grace period to catch late reply files.
+                    # On Windows, killing conhost doesn't kill child processes
+                    # (PowerShell, Copilot), so the reply file may still appear.
+                    if _wait_for_reply(reply_file, TIMEOUT_GRACE_SECONDS):
+                        exit_code = 0
+                        print(f"  [executor] reply arrived during grace period")
+                    else:
+                        _kill_process_tree(proc.pid)
+                        return ExecutionResult(
+                            success=False,
+                            reply_text="Task timed out after 1 hour.",
+                            exit_code=-1,
+                            error="timeout",
+                        )
                 if proc.poll() is None:
                     try:
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        pass
+                        _kill_process_tree(proc.pid)
 
             # Read reply
             reply_text = ""
@@ -370,7 +401,16 @@ class CopilotExecutor(Executor):
             )
 
         except subprocess.TimeoutExpired:
-            proc.kill()
+            # Session-zero path: check for a late reply before declaring timeout
+            if _wait_for_reply(reply_file, TIMEOUT_GRACE_SECONDS):
+                reply_text = reply_file.read_text(encoding="utf-8").strip()
+                reply_file.unlink(missing_ok=True)
+                _kill_process_tree(proc.pid)
+                if reply_text:
+                    return ExecutionResult(
+                        success=True, reply_text=reply_text, exit_code=0
+                    )
+            _kill_process_tree(proc.pid)
             return ExecutionResult(
                 success=False,
                 reply_text="Task timed out after 1 hour.",
