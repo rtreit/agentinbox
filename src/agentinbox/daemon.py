@@ -28,6 +28,7 @@ from .executors.copilot import CopilotExecutor
 from .executors.command import CommandExecutor
 from .executors.python_script import PythonScriptExecutor
 from .inbox import get_all_directives
+from .keep_awake import prevent_sleep, allow_sleep
 from .notify import post as groupme_post
 from .reply_router import post_directive_event
 from . import task_tracker
@@ -231,6 +232,8 @@ def run_daemon(config: Config) -> None:
         else None
     )
 
+    awake = prevent_sleep()
+
     print(f"Agent Inbox daemon started")
     print(f"  Agent: {config.agent_name}")
     print(f"  Queue: {config.resolved_queue_name}")
@@ -240,6 +243,7 @@ def run_daemon(config: Config) -> None:
     print(f"  Working dir: {Path(config.working_directory).resolve()}")
     print(f"  Interval: {config.poll_interval}s")
     print(f"  Log dir: {log_dir}")
+    print(f"  Sleep prevention: {'active' if awake else 'unavailable'}")
     if startup_warning:
         print(f"  {startup_warning}")
     print()
@@ -251,6 +255,7 @@ def run_daemon(config: Config) -> None:
         "executor": executor.name(),
         "copilot": executor.resolved_path if isinstance(executor, CopilotExecutor) else None,
         "interval": config.poll_interval,
+        "sleep_prevention": awake,
     })
     if startup_warning:
         _log_entry(log_dir, {
@@ -295,5 +300,6 @@ def run_daemon(config: Config) -> None:
             time.sleep(config.poll_interval)
 
     except KeyboardInterrupt:
+        allow_sleep()
         print("\nDaemon stopped.")
         _log_entry(log_dir, {"event": "daemon_stop", "reason": "keyboard_interrupt"})
